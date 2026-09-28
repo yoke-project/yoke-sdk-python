@@ -21,6 +21,10 @@ case "$(uname -m)" in
   *) architecture="$(uname -m)" ;;
 esac
 
+# The Python tests' results, where the run left them.
+python=""
+[[ -f "$results/python.json" ]] && python="$results/python.json"
+
 tool="$(command -v yoke-verify)" || { echo "record: yoke-verify is not on PATH; \`just develop\` puts it there" >&2; exit 1; }
 version="$(grep -aoE $'mod\tgithub\\.com/yoke-project/yoke\t[^\t]+' "$tool" | head -n 1 | cut -f3)"
 revision="$(grep -aoE 'vcs\.revision=[0-9a-f]{40}' "$tool" | head -n 1 | cut -d= -f2)"
@@ -34,4 +38,5 @@ yoke-verify record \
   --finished "$(tr -d '[:space:]' < "$results/finished")" \
   --ran "yoke-verify=${version:-unknown}@${revision:0:12}" \
   --results "$results/checks.txt" \
+  ${python:+--results "$python"} \
   "$root"

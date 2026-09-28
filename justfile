@@ -1,9 +1,18 @@
 # The six verbs every repository defines.
 # A verb with nothing to do says so in one line, so a fan-out can tell a gap from a statement.
 
+# The virtual environment the libraries are installed and tested in.
+venv := env_var_or_default("XDG_CACHE_HOME", env_var("HOME") + "/.cache") + "/yoke-sdk-python/venv"
+
 # Build this repository's codebase.
 build:
-    @echo "build: nothing to build in yoke-sdk-python yet"
+    #!/usr/bin/env bash
+    # The libraries and what they depend on go into a virtual environment of this repository's own,
+    # outside the tree the checks read.
+    set -euo pipefail
+    [[ -x "{{venv}}/bin/python" ]] || python -m venv "{{venv}}"
+    "{{venv}}/bin/python" -m pip install --quiet --disable-pip-version-check -e .
+    echo "build: the libraries are installed in {{venv}}"
 
 # Run this repository's own checks, with no sibling present.
 test:
@@ -21,6 +30,7 @@ test:
         status=1
     fi
     bash checks/run.sh | tee .results/checks.txt || status=1
+    "{{venv}}/bin/python" ci/unittest-results.py tests .results/python.json || status=1
     date -u +%Y-%m-%dT%H:%M:%SZ > .results/finished
     exit "$status"
 
