@@ -14,5 +14,8 @@ requires-python = ">=3.10"
 dependencies = ["yoke-proto==0.1.0", "grpcio>=1.84.0"]
 classifiers = ["Private :: Do Not Upload"]
 
+[project.scripts]
+yoke-python-plugin-harness = "yoke_sdk.harness:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/yoke_sdk"]
