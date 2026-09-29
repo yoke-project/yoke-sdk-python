@@ -116,6 +116,7 @@ class TheHarness(unittest.IsolatedAsyncioTestCase):
         )
         self.addAsyncCleanup(self._kill)
         self.reader, self.writer = await asyncio.wait_for(connected, 10)
+        self.addCleanup(self.writer.close)
         self.next = 0
         return await self.read()
 
