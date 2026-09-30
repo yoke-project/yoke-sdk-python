@@ -236,6 +236,7 @@ capabilities:
         )
         self.assertEqual(list(r.declared.commands), d.commands)
         self.assertEqual(list(r.declared.queries), d.queries)
+        self.assertEqual(list(r.declared.occurrences), d.occurrences)
 
     # std: yoke-sdk-python:the-plugin-library.04
     async def test_the_units_socket_is_bound_before_it_registers(self):
@@ -277,6 +278,7 @@ capabilities:
             register_pb2.Surface(
                 streams=["station.diagnostics"],
                 capabilities=["stream.diagnostics.publish"],
+                occurrences=["calibration.drift"],
             )
         )
         await self.bench(answer)
@@ -286,6 +288,7 @@ capabilities:
         self.assertEqual(a.granted.streams, ["station.spectra"])
         self.assertEqual(a.withheld.streams, ["station.diagnostics"])
         self.assertEqual(a.withheld.capabilities, ["stream.diagnostics.publish"])
+        self.assertEqual(a.withheld.occurrences, ["calibration.drift"])
 
     # std: yoke-sdk-python:the-plugin-library.07
     async def test_the_session_opens_and_beats_on_the_cores_terms(self):

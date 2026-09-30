@@ -42,7 +42,7 @@
 | **Label** | blocking |
 | **Precondition** | a unit started with the declaration of case 1, against a plugin channel that records what arrives |
 | **Action** | start it |
-| **Expected** | the request carries the plugin, the unit and the token from the environment, the protocol, the language `python` and this library's SDK line, and declared lists equal to the Manifest's; it carries no incarnation |
+| **Expected** | the request carries the plugin, the unit and the token from the environment, the protocol, the language `python` and this library's SDK line, and declared lists equal to the Manifest's — capabilities, streams, commands, queries and occurrences; it carries no incarnation |
 
 ## yoke-sdk-python:the-plugin-library.04 — the unit's own socket is bound before it registers
 
@@ -79,9 +79,9 @@
 | **Method** | test |
 | **Not applicable in** | — |
 | **Label** | blocking |
-| **Precondition** | a plugin channel that accepts with restrictions, granting one stream and withholding the other |
+| **Precondition** | a plugin channel that accepts with restrictions, granting one stream and withholding the other, and withholding the declared occurrence |
 | **Action** | start a unit |
-| **Expected** | the unit reports it was admitted with restrictions, the granted scope and the withheld items by name |
+| **Expected** | the unit reports it was admitted with restrictions, the granted scope and the withheld items by name, the occurrence among them |
 
 ## yoke-sdk-python:the-plugin-library.07 — the Session opens with the given identity, and beats on the Core's terms
 

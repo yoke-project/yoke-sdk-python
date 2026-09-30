@@ -285,6 +285,32 @@ class TheHarness(unittest.IsolatedAsyncioTestCase):
             "the workflow does not run the suite after just test",
         )
 
+    # std: yoke-sdk-python:the-harness.09
+    async def test_a_question_is_observed_with_its_bytes(self):
+        await self.started()
+        await self.directive("start")
+        await self.send(
+            session_pb2.Envelope(
+                message_id="q-1",
+                session_id="sid-1",
+                query=families_pb2.Query(
+                    question=families_pb2.Query.Question(
+                        type="status", payload=b"how are you"
+                    )
+                ),
+            )
+        )
+        observed = await self.read()
+        self.assertEqual(observed["kind"], "question")
+        self.assertEqual(
+            (
+                observed["fields"]["id"],
+                observed["fields"]["type"],
+                observed["fields"].get("payload"),
+            ),
+            ("q-1", "status", "how are you"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
