@@ -50,6 +50,7 @@ def _scope(s):
         "streams": s.streams,
         "commands": s.commands,
         "queries": s.queries,
+        "occurrences": s.occurrences,
     }
 
 
@@ -134,7 +135,11 @@ class _Harness:
                 kind, fields = "command", {"id": event.id, "type": event.type}
             elif isinstance(event, plugin.Question):
                 self.questions[event.id] = event
-                kind, fields = "question", {"id": event.id, "type": event.type}
+                kind, fields = "question", {
+                    "id": event.id,
+                    "type": event.type,
+                    "payload": event.payload.decode("utf-8", "replace"),
+                }
             elif isinstance(event, plugin.Activated):
                 kind, fields = "activated", {
                     "stream": event.stream,
