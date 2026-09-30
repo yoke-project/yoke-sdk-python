@@ -132,6 +132,7 @@ class Declaration:
             streams=[s.id for s in self.streams],
             commands=self.commands,
             queries=self.queries,
+            occurrences=self.occurrences,
         )
 
 
@@ -152,7 +153,7 @@ class Scope:
             list(surface.streams),
             list(surface.commands),
             list(surface.queries),
-            [],
+            list(surface.occurrences),
         )
 
 
