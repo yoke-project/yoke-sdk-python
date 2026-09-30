@@ -109,3 +109,16 @@
 | **Precondition** | the repository's conformance script and its workflow |
 | **Action** | read how the script obtains the suite and the Core, and where the workflow runs it |
 | **Expected** | it downloads `yoke`'s published conformance archive, compares its digest with the release manifest's line before using it, and builds nothing of `yoke`; the workflow runs it after `just test` |
+
+## yoke-sdk-python:the-harness.09 — a question is observed with the bytes it carries
+
+| Field | Value |
+| --- | --- |
+| **Cites** | specs/90.29 · arch/90-sdks/04 §The control protocol · arch/50-plugin-surface/05 §The eight |
+| **Level** | L1 |
+| **Method** | test |
+| **Not applicable in** | — |
+| **Label** | blocking |
+| **Precondition** | a harness whose unit was started against a plugin channel |
+| **Action** | the channel asks the unit a question carrying `how are you` |
+| **Expected** | the harness reports an observation `question` with the question's identity, its type and its payload as the text sent — the suite requires the bytes, not only that a question arrived |

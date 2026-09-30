@@ -137,12 +137,13 @@ class Declaration:
 
 @dataclasses.dataclass
 class Scope:
-    """Four lists: what was granted, or what was withheld."""
+    """Five lists: what was granted, or what was withheld."""
 
     capabilities: list
     streams: list
     commands: list
     queries: list
+    occurrences: list
 
     @classmethod
     def of(cls, surface):
@@ -151,6 +152,7 @@ class Scope:
             list(surface.streams),
             list(surface.commands),
             list(surface.queries),
+            [],
         )
 
 
