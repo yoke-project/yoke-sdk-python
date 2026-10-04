@@ -293,7 +293,8 @@ capabilities:
     # std: yoke-sdk-python:the-plugin-library.07
     async def test_the_session_opens_and_beats_on_the_cores_terms(self):
         channel = await self.bench(accepted())
-        await self.start()
+        unit = await self.start()
+        await unit.health(10, "ready")
         await asyncio.sleep(0.45)
         first = channel.received[0][1]
         self.assertEqual(
@@ -304,6 +305,34 @@ capabilities:
         self.assertGreaterEqual(len(beats), 3, f"{len(beats)} heartbeats in 450 ms")
         for earlier, later in zip(beats, beats[1:]):
             self.assertGreaterEqual(later - earlier, 0.05)
+
+    # std: yoke-sdk-python:the-plugin-library.13
+    async def test_a_beat_repeats_the_authors_last_report(self):
+        channel = await self.bench(accepted())
+        unit = await self.start()
+
+        def health():
+            return [
+                f"{e.health.grade} {e.health.line}"
+                for _, e in channel.received
+                if payload(e) == "health"
+            ]
+
+        await asyncio.sleep(0.35)
+        self.assertEqual(
+            health(), [], "a report reached the channel before the author's"
+        )
+        await unit.health(40, "warming")
+        await asyncio.sleep(0.35)
+        first = health()
+        await unit.health(10, "ready")
+        await asyncio.sleep(0.35)
+        reports = health()
+        second = reports[reports.index("10 ready") :]
+        self.assertGreaterEqual(len(first), 3, first)
+        self.assertEqual(set(first), {"40 warming"}, first)
+        self.assertGreaterEqual(len(second), 3, second)
+        self.assertEqual(set(second), {"10 ready"}, second)
 
     # std: yoke-sdk-python:the-plugin-library.08
     async def test_the_end_of_a_session_is_surfaced_and_nothing_reconnects(self):
