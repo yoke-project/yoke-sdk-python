@@ -22,7 +22,8 @@ from yoke.plugin.v1 import (
     session_pb2_grpc,
 )
 
-from yoke_sdk import harness, plugin
+import yoke_sdk_harness as harness
+from yoke_sdk import plugin
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -112,7 +113,7 @@ class TheHarness(unittest.IsolatedAsyncioTestCase):
             "YOKE_TOKEN": "t",
         }
         self.process = await asyncio.create_subprocess_exec(
-            sys.executable, "-m", "yoke_sdk.harness", env=env
+            sys.executable, "-m", "yoke_sdk_harness", env=env
         )
         self.addAsyncCleanup(self._kill)
         self.reader, self.writer = await asyncio.wait_for(connected, 10)
@@ -235,7 +236,9 @@ class TheHarness(unittest.IsolatedAsyncioTestCase):
         self.writer.write(b'{"type":"finish"}\n')
         await self.writer.drain()
         self.assertEqual(await self.exits(3), 0)
-        source = (ROOT / "src" / "yoke_sdk" / "harness.py").read_text()
+        source = (
+            ROOT / "harness" / "src" / "yoke_sdk_harness" / "__init__.py"
+        ).read_text()
         for node in ast.walk(ast.parse(source)):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 names = (

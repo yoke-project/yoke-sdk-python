@@ -224,7 +224,3 @@ async def serve(getenv=os.environ.get):
 
 def main():
     raise SystemExit(asyncio.run(serve()))
-
-
-if __name__ == "__main__":
-    main()
