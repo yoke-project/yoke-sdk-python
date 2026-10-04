@@ -3,9 +3,10 @@
 One declaration is both the Manifest the library generates and the surface its registration claims,
 so the two cannot be written apart. Starting a unit performs the first acts in their order: read the
 environment, bind the unit's own socket, register, open the Session — and then beats on the terms the
-Core assigned. Everything the Session brings is surfaced, its end included: a Session that ends ends
-the incarnation, and the library never reconnects, never retries an admission, never polls, never
-creates a stream's transport and never chooses a severity.
+Core assigned, repeating the author's last health report. Everything the Session brings is surfaced,
+its end included: a Session that ends ends the incarnation, and the library never reconnects, never
+retries an admission, never polls, never creates a stream's transport and never chooses a severity or
+a grade.
 """
 
 import asyncio
@@ -263,6 +264,8 @@ class Unit:
         self._events = asyncio.Queue()
         self._ended = self._closing = False
         self._active = set()
+        # The author's last health report, which every beat repeats; none until one.
+        self._health = None
         self._tasks = []
 
     def _send(self, family, message, to=None):
@@ -340,10 +343,19 @@ class Unit:
             )
 
     async def _beat(self, interval):
-        while True:
+        # Before the author's first report it sends nothing: a grade is the author's statement, and a
+        # unit that never reports loses its liveness as a unit that sends nothing does.
+        while not self._ended:
             await asyncio.sleep(interval)
+            if self._health is None:
+                continue
             try:
-                self._send("health", families_pb2.Health(grade=99))
+                self._send(
+                    "health",
+                    families_pb2.Health(
+                        grade=self._health.grade, line=self._health.line
+                    ),
+                )
             except Refusal:
                 return
 
@@ -409,9 +421,13 @@ class Unit:
         )
 
     async def health(self, grade, line=""):
-        """Reports how well the unit is: a grade from 0 to 99, and a line."""
+        """Reports how well the unit is: a grade from 0 to 99, and a line. The library repeats the last
+        report at every beat, and sends no beat before the first: a unit keeps its liveness only once
+        its author has reported, so the first report must come within the tolerance the Core assigned.
+        """
         if not 0 <= grade <= 99:
             raise Misuse(f"a grade runs from 0 to 99, and {grade} is not one")
+        self._health = families_pb2.Health(grade=grade, line=line)
         self._send("health", families_pb2.Health(grade=grade, line=line))
 
     async def emit(self, stream, payload):
