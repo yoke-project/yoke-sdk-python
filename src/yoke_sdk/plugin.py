@@ -23,6 +23,7 @@ from yoke.plugin.v1 import (
     session_pb2_grpc,
 )
 
+from yoke_sdk import __version__
 from yoke_sdk.base import (
     PLUGIN_CONTRACT,
     Envelopes,
@@ -35,7 +36,7 @@ from yoke_sdk.base import (
 )
 
 # What this library says it is, at admission.
-SDK_LINE = "yoke-sdk-python 0.0.0"
+SDK_LINE = "yoke-sdk-python " + __version__
 
 
 @dataclasses.dataclass

@@ -1,0 +1,20 @@
+# The Python plugin library's harness, which the conformance suite drives. It is a project of its own so
+# the wheel yoke-sdk never carries it, and it is never uploaded.
+[build-system]
+requires = ["hatchling==1.32.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "yoke-python-plugin-harness"
+version = "0.0.0"
+description = "The Python plugin library's harness, which the conformance suite drives"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+dependencies = ["yoke-sdk"]
+classifiers = ["Private :: Do Not Upload"]
+
+[project.scripts]
+yoke-python-plugin-harness = "yoke_sdk_harness:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/yoke_sdk_harness"]

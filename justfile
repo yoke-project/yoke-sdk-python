@@ -11,8 +11,8 @@ build:
     # outside the tree the checks read.
     set -euo pipefail
     [[ -x "{{venv}}/bin/python" ]] || python -m venv "{{venv}}"
-    "{{venv}}/bin/python" -m pip install --quiet --disable-pip-version-check -e .
-    echo "build: the libraries are installed in {{venv}}"
+    "{{venv}}/bin/python" -m pip install --quiet --disable-pip-version-check -e . -e harness
+    echo "build: the libraries and the harness are installed in {{venv}}"
 
 # Run this repository's own checks, with no sibling present.
 test:
@@ -74,4 +74,11 @@ develop floor="" verify="":
 
 # Publish into this repository's ecosystem, one manifest line per publication.
 release:
-    @echo "release: nothing to publish from yoke-sdk-python yet"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # The published release verb of `yoke`, publishing this family's wheel alone: it packages it by
+    # ci/package.sh, which refuses a tag that is not the tree's version. It is resolved at its source,
+    # since the proxy may still hold an older answer for a branch, with git's automatic collection off,
+    # which would otherwise rewrite the shallow clone under go's second fetch.
+    version="$(cd "$(mktemp -d)" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=gc.auto GIT_CONFIG_VALUE_0=0 GOPROXY=direct go list -m -f '{{{{.Version}}' github.com/yoke-project/yoke@main)"
+    go run "github.com/yoke-project/yoke/cmd/yoke-release@$version" -wheel yoke-sdk

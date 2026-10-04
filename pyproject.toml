@@ -1,21 +1,24 @@
-# The Python family: a base and the libraries over it. Nothing is published before 0.3, which names the
-# package; until then it is source only.
+# The Python family: one wheel, yoke-sdk, carrying the base and the libraries over it, at the version
+# yoke_sdk states. The harness beside it is a project of its own, never uploaded.
 [build-system]
 requires = ["hatchling==1.32.4"]
 build-backend = "hatchling.build"
 
 [project]
 name = "yoke-sdk"
-version = "0.0.0"
+dynamic = ["version"]
 description = "The Python libraries of Yoke"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.10"
 dependencies = ["yoke-proto==0.2.0", "grpcio>=1.84.0"]
-classifiers = ["Private :: Do Not Upload"]
 
-[project.scripts]
-yoke-python-plugin-harness = "yoke_sdk.harness:main"
+[project.urls]
+Source = "https://github.com/yoke-project/yoke-sdk-python"
+
+[tool.hatch.version]
+path = "src/yoke_sdk/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/yoke_sdk"]
+exclude = ["*.std.md"]
