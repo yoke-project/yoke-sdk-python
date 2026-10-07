@@ -12,16 +12,23 @@ from yoke_sdk import base, plugin
 
 
 def declaration():
-    """What the harness declares: one object of every kind, each governed by a capability."""
+    """What the harness declares: one object of every kind, a stream on each transport, each governed
+    by a capability."""
     return plugin.Declaration(
         id="com.yoke.conformance.python",
-        streams=[plugin.Stream("conformance.data")],
+        streams=[
+            plugin.Stream("conformance.data"),
+            plugin.Stream("conformance.frames", tolerates_loss=True),
+        ],
         commands=["calibrate"],
         queries=["status"],
         occurrences=["conformance.drift"],
         capabilities=[
             plugin.Capability(
                 "stream.data.publish", plugin.Object(stream="conformance.data")
+            ),
+            plugin.Capability(
+                "stream.frames.publish", plugin.Object(stream="conformance.frames")
             ),
             plugin.Capability(
                 "command.calibrate.accept", plugin.Object(command="calibrate")
