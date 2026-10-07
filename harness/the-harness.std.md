@@ -122,3 +122,16 @@
 | **Precondition** | a harness whose unit was started against a plugin channel |
 | **Action** | the channel asks the unit a question carrying `how are you` |
 | **Expected** | the harness reports an observation `question` with the question's identity, its type and its payload as the text sent — the suite requires the bytes, not only that a question arrived |
+
+## yoke-sdk-python:the-harness.10 — it declares a stream on each transport, each governed by a capability
+
+| Field | Value |
+| --- | --- |
+| **Cites** | specs/50.86 · arch/50-plugin-surface/07 §What the two tolerances select · arch/90-sdks/03 §A real Core, and no fixture |
+| **Level** | L1 |
+| **Method** | test |
+| **Not applicable in** | — |
+| **Label** | blocking |
+| **Precondition** | none |
+| **Action** | read the harness's declaration |
+| **Expected** | one stream that tolerates neither loss nor reorder, and one that tolerates loss, each governed by a capability of its own |

@@ -5,6 +5,8 @@ import asyncio
 import os
 import pathlib
 import shutil
+import socket
+import struct
 import tempfile
 import time
 import unittest
@@ -432,6 +434,158 @@ capabilities:
         self.assertFalse(
             any(payload(e) == "data" for _, e in channel.received),
             "data reached the channel",
+        )
+
+    def listening(self):
+        """A packet socket and a datagram socket the test listens on, as the Core would for two
+        activated streams, and an address nothing listens on."""
+        self.ordered = os.path.join(self.dir, "spectra.sock")
+        self.framed = os.path.join(self.dir, "preview.sock")
+        self.nobody = os.path.join(self.dir, "nobody.sock")
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        listener.bind(self.ordered)
+        listener.listen(1)
+        listener.setblocking(False)
+        self.addCleanup(listener.close)
+        self.packets = asyncio.Queue()
+
+        async def accept():
+            loop = asyncio.get_running_loop()
+            conn, _ = await loop.sock_accept(listener)
+            with conn:
+                while packet := await loop.sock_recv(conn, 1 << 16):
+                    await self.packets.put(packet)
+            await self.packets.put(None)
+
+        task = asyncio.create_task(accept())
+        self.addCleanup(task.cancel)
+        self.datagrams = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        self.datagrams.bind(self.framed)
+        self.datagrams.settimeout(2)
+        self.addCleanup(self.datagrams.close)
+
+    async def activate(self, message_id, stream, transport, address):
+        await self.send(
+            message_id=message_id,
+            control=families_pb2.Control(
+                activate=families_pb2.Control.Activate(
+                    stream=stream, transport=transport, address=address
+                )
+            ),
+        )
+
+    async def acked(self, message_id):
+        e = await self.received(
+            lambda e: e.correlation_id == message_id and payload(e) == "ack"
+        )
+        return e.ack
+
+    async def handed(self, unit, kind):
+        async def first():
+            while True:
+                event = await unit.next()
+                if isinstance(event, kind):
+                    return event
+
+        return await asyncio.wait_for(first(), 2)
+
+    # std: yoke-sdk-python:the-plugin-library.14
+    async def test_an_activation_connects_the_library_and_is_acknowledged(self):
+        Activate = families_pb2.Control.Activate
+        await self.bench(accepted())
+        self.listening()
+        unit = await self.start()
+        await self.opened()
+        await self.activate(
+            "c-1", "station.spectra", Activate.TRANSPORT_ORDERED, self.ordered
+        )
+        self.assertEqual(
+            (await self.acked("c-1")).outcome, families_pb2.Ack.OUTCOME_DONE
+        )
+        a = await self.handed(unit, plugin.Activated)
+        self.assertEqual((a.stream, a.transport), ("station.spectra", "ordered"))
+        await self.activate(
+            "c-2", "station.preview", Activate.TRANSPORT_FRAMED, self.framed
+        )
+        self.assertEqual(
+            (await self.acked("c-2")).outcome, families_pb2.Ack.OUTCOME_DONE
+        )
+        a = await self.handed(unit, plugin.Activated)
+        self.assertEqual((a.stream, a.transport), ("station.preview", "framed"))
+        await self.activate(
+            "c-3", "station.diagnostics", Activate.TRANSPORT_ORDERED, self.nobody
+        )
+        failed = await self.acked("c-3")
+        self.assertEqual(failed.outcome, families_pb2.Ack.OUTCOME_FAILED)
+        self.assertTrue(failed.line, "the failure says nothing")
+        with self.assertRaises(base.Refusal) as refused:
+            await unit.emit("station.diagnostics", b"x")
+        self.assertEqual(refused.exception.code, "stream.inactive")
+
+    # std: yoke-sdk-python:the-plugin-library.15
+    async def test_emit_writes_one_envelope_per_packet_or_one_frame_per_datagram(self):
+        Activate = families_pb2.Control.Activate
+        channel = await self.bench(accepted())
+        self.listening()
+        unit = await self.start()
+        await self.opened()
+        await self.activate(
+            "c-1", "station.spectra", Activate.TRANSPORT_ORDERED, self.ordered
+        )
+        await self.acked("c-1")
+        await self.activate(
+            "c-2", "station.preview", Activate.TRANSPORT_FRAMED, self.framed
+        )
+        await self.acked("c-2")
+        texts = [b"one", b"two", b"three"]
+        for text in texts:
+            await unit.emit("station.spectra", text)
+            await unit.emit("station.preview", text)
+        for n, text in enumerate(texts, 1):
+            packet = await asyncio.wait_for(self.packets.get(), 2)
+            e = session_pb2.Envelope.FromString(packet)
+            self.assertTrue(
+                e.message_id and e.session_id == "sid-1" and e.sent_at_unix_nano > 0, e
+            )
+            self.assertEqual(payload(e), "data")
+            self.assertEqual((e.data.sequence, e.data.payload), (n, text))
+            frame = self.datagrams.recv(256)
+            sequence, clock = struct.unpack("<QQ", frame[:16])
+            self.assertEqual((sequence, frame[16:]), (n, text))
+            self.assertGreater(clock, 0)
+        self.assertFalse(
+            any(payload(e) == "data" for _, e in channel.received),
+            "data reached the Session",
+        )
+
+    # std: yoke-sdk-python:the-plugin-library.16
+    async def test_a_stop_closes_the_transport_and_emit_is_refused_after_it(self):
+        Activate = families_pb2.Control.Activate
+        await self.bench(accepted())
+        self.listening()
+        unit = await self.start()
+        await self.opened()
+        await self.activate(
+            "c-1", "station.spectra", Activate.TRANSPORT_ORDERED, self.ordered
+        )
+        await self.acked("c-1")
+        await self.send(
+            message_id="c-2",
+            control=families_pb2.Control(
+                stop=families_pb2.Control.Stop(stream="station.spectra")
+            ),
+        )
+        self.assertEqual(
+            (await self.acked("c-2")).outcome, families_pb2.Ack.OUTCOME_DONE
+        )
+        stopped = await self.handed(unit, plugin.Stopped)
+        self.assertEqual(stopped.stream, "station.spectra")
+        with self.assertRaises(base.Refusal) as refused:
+            await unit.emit("station.spectra", b"after")
+        self.assertEqual(refused.exception.code, "stream.inactive")
+        self.assertIsNone(
+            await asyncio.wait_for(self.packets.get(), 2),
+            "a packet reached the socket after the stop",
         )
 
 

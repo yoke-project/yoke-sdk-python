@@ -314,6 +314,18 @@ class TheHarness(unittest.IsolatedAsyncioTestCase):
             ("q-1", "status", "how are you"),
         )
 
+    # std: yoke-sdk-python:the-harness.10
+    def test_it_declares_a_stream_on_each_transport(self):
+        d = harness.declaration()
+        strict = [
+            s for s in d.streams if not s.tolerates_loss and not s.tolerates_reorder
+        ]
+        lossy = [s for s in d.streams if s.tolerates_loss]
+        self.assertTrue(strict and lossy, f"the streams declared are {d.streams}")
+        governed = {c.governs.stream for c in d.capabilities}
+        for stream in (strict[0].id, lossy[0].id):
+            self.assertIn(stream, governed, f"{stream} is governed by no capability")
+
 
 if __name__ == "__main__":
     unittest.main()
