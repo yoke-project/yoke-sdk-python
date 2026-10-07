@@ -15,6 +15,10 @@ import enum
 import json
 import os
 import re
+import socket
+import struct
+import threading
+import time
 
 from yoke.plugin.v1 import (
     families_pb2,
@@ -264,7 +268,8 @@ class Unit:
         )
         self._events = asyncio.Queue()
         self._ended = self._closing = False
-        self._active = set()
+        # Each activated stream: its connection, whether it is framed, and the last sequence written.
+        self._active = {}
         # The author's last health report, which every beat repeats; none until one.
         self._health = None
         self._tasks = []
@@ -284,6 +289,9 @@ class Unit:
         if self._ended:
             return
         self._ended = True
+        for flow in self._active.values():
+            flow.conn.close()
+        self._active.clear()
         if self._outbound is not None:
             self._outbound.put_nowait(_END)
             self._outbound = None
@@ -319,12 +327,39 @@ class Unit:
                             families_pb2.Control.Activate.Transport.Name(a.transport),
                             "TRANSPORT_",
                         )
-                        self._active.add(a.stream)
+                        try:
+                            flow = _connect(a)
+                        except OSError as failure:
+                            self._send(
+                                "ack",
+                                families_pb2.Ack(
+                                    outcome=families_pb2.Ack.OUTCOME_FAILED,
+                                    line=f"the transport of {a.stream} at {a.address} cannot be reached: {failure}",
+                                ),
+                                to=e.message_id,
+                            )
+                            continue
+                        former = self._active.pop(a.stream, None)
+                        if former is not None:
+                            former.conn.close()
+                        self._active[a.stream] = flow
+                        self._send(
+                            "ack",
+                            families_pb2.Ack(outcome=families_pb2.Ack.OUTCOME_DONE),
+                            to=e.message_id,
+                        )
                         self._events.put_nowait(
                             Activated(a.stream, transport, a.address)
                         )
                     elif kind == "stop":
-                        self._active.discard(e.control.stop.stream)
+                        flow = self._active.pop(e.control.stop.stream, None)
+                        if flow is not None:
+                            flow.conn.close()
+                        self._send(
+                            "ack",
+                            families_pb2.Ack(outcome=families_pb2.Ack.OUTCOME_DONE),
+                            to=e.message_id,
+                        )
                         self._events.put_nowait(Stopped(e.control.stop.stream))
                 elif family == "query" and e.query.WhichOneof("kind") == "question":
                     q = e.query.question
@@ -432,17 +467,59 @@ class Unit:
         self._send("health", families_pb2.Health(grade=grade, line=line))
 
     async def emit(self, stream, payload):
-        """Sends data on a stream. Only the Core creates a stream's transport, so a stream it has not
-        activated has nowhere to be written, and the library refuses rather than make one.
+        """Sends data on a stream, on the transport its activation named: one data envelope per packet
+        on the ordered transport, one frame per datagram on the framed one, numbered from 1 within the
+        activation. Only the Core creates a stream's transport, so a stream it has not activated has
+        nowhere to be written, and the library refuses rather than make one.
         """
-        if stream not in self._active:
+        flow = self._active.get(stream)
+        if flow is None:
             raise Refusal(
                 "stream.inactive", f"the stream {stream} has not been activated"
             )
-        raise Refusal(
-            "stream.inactive",
-            f"the transport of {stream} is not one this library reaches yet",
-        )
+        with flow.lock:
+            flow.sequence += 1
+            if flow.framed:
+                message = struct.pack("<QQ", flow.sequence, time.time_ns()) + payload
+            else:
+                message = self._envelopes.seal(
+                    "data", families_pb2.Data(sequence=flow.sequence, payload=payload)
+                ).SerializeToString()
+            try:
+                flow.conn.send(message)
+            except OSError as failure:
+                raise Refusal(
+                    "stream.inactive",
+                    f"the transport of {stream} took nothing: {failure}",
+                ) from failure
+
+
+@dataclasses.dataclass
+class _Flow:
+    """One activated stream: the library's connection to its transport, and the last sequence."""
+
+    conn: socket.socket
+    framed: bool
+    sequence: int = 0
+    lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
+
+
+def _connect(a):
+    """Reaches the transport an activation names, as the Core created it."""
+    Activate = families_pb2.Control.Activate
+    if a.transport == Activate.TRANSPORT_ORDERED:
+        kind, framed = socket.SOCK_SEQPACKET, False
+    elif a.transport == Activate.TRANSPORT_FRAMED:
+        kind, framed = socket.SOCK_DGRAM, True
+    else:
+        raise OSError(f"the transport {a.transport} is not one this library reaches")
+    conn = socket.socket(socket.AF_UNIX, kind)
+    try:
+        conn.connect(a.address)
+    except OSError:
+        conn.close()
+        raise
+    return _Flow(conn, framed)
 
 
 async def start(declaration, getenv=os.environ.get):
