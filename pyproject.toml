@@ -11,7 +11,7 @@ description = "The Python libraries of Yoke"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.10"
-dependencies = ["yoke-proto==0.2.0", "grpcio>=1.84.0"]
+dependencies = ["yoke-proto==0.3.0", "grpcio>=1.84.0"]
 
 [project.urls]
 Source = "https://github.com/yoke-project/yoke-sdk-python"
