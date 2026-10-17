@@ -9,7 +9,7 @@
 
 | Field | Value |
 | --- | --- |
-| **Cites** | prj_structure/80 §The layout · arch/90-sdks/01 §One project, and what the base may hold · prj_structure/95 §The licences |
+| **Cites** | prj_structure/80 §The layout · arch/90-sdks/01 §One project, and what the base may hold · prj_structure/95 §The licences · prj_structure/40 B5 |
 | **Level** | L1 |
 | **Method** | check |
 | **Not applicable in** | — |
@@ -35,7 +35,7 @@
 
 | Field | Value |
 | --- | --- |
-| **Cites** | prj_structure/95 §The release command · prj_structure/97 §The definitions, and the four families that are not Go |
+| **Cites** | prj_structure/95 §The release command · prj_structure/97 §The definitions, and the four families that are not Go · prj_structure/40 F2 |
 | **Level** | L1 |
 | **Method** | check |
 | **Not applicable in** | — |
