@@ -509,7 +509,8 @@ class Unit:
 @dataclasses.dataclass
 class _Flow:
     """One activated stream: the library's connection to its transport, and the last sequence. On the
-    shared ring the connection is held for the stream's life and the frames go into the ring."""
+    shared ring the connection is held for the stream's life and the frames go into the ring.
+    """
 
     conn: socket.socket
     framed: bool
