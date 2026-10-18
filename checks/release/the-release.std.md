@@ -2,10 +2,10 @@
 
 | | |
 | --- | --- |
-| **Feature** | this family publishes one wheel, `yoke-sdk`, carrying the base and the plugin library as `yoke_sdk.base` and `yoke_sdk.plugin`, at the version the tree states — which is the version the library says it is — and it publishes it with `yoke`'s published release verb, at its release tag, by trusted publishing; the harness is never published |
+| **Feature** | this family publishes one wheel, `yoke-sdk`, carrying the base and the plugin and interface libraries as `yoke_sdk.base`, `yoke_sdk.plugin` and `yoke_sdk.interface`, at the version the tree states — which is the version the library says it is — and it publishes it with `yoke`'s published release verb, at its release tag, by trusted publishing; the harnesses are never published |
 | **Planning item** | yoke-project/yoke-sdk-python#25 |
 
-## yoke-sdk-python:the-release.01 — one wheel, yoke-sdk, carries the base and the plugin library, the licence and the notice; the harness is not published
+## yoke-sdk-python:the-release.01 — one wheel, yoke-sdk, carries the base and the plugin and interface libraries, the licence and the notice; the harnesses are not published
 
 | Field | Value |
 | --- | --- |
@@ -15,8 +15,8 @@
 | **Not applicable in** | — |
 | **Label** | blocking |
 | **Precondition** | a clean checkout |
-| **Action** | build the wheel `yoke-sdk` and list what it carries; read the harness's project |
-| **Expected** | it carries `yoke_sdk/base.py` and `yoke_sdk/plugin.py`, `LICENSE` and `NOTICE`, and nothing of the harness, no test description and no command; the harness is a project of its own that says it is never uploaded, and the wheel's project says no such thing |
+| **Action** | build the wheel `yoke-sdk` and list what it carries; read the harnesses' projects |
+| **Expected** | it carries `yoke_sdk/base.py`, `yoke_sdk/plugin.py` and `yoke_sdk/interface.py`, `LICENSE` and `NOTICE`, and nothing of the harnesses, no test description and no command; each harness is a project of its own that says it is never uploaded, and the wheel's project says no such thing |
 
 ## yoke-sdk-python:the-release.02 — the wheel is packaged at the tree's version and no other, and the library says that version
 

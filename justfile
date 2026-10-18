@@ -11,8 +11,8 @@ build:
     # outside the tree the checks read.
     set -euo pipefail
     [[ -x "{{venv}}/bin/python" ]] || python -m venv "{{venv}}"
-    "{{venv}}/bin/python" -m pip install --quiet --disable-pip-version-check -e . -e harness
-    echo "build: the libraries and the harness are installed in {{venv}}"
+    "{{venv}}/bin/python" -m pip install --quiet --disable-pip-version-check -e . -e harness -e interface-harness
+    echo "build: the libraries and the harnesses are installed in {{venv}}"
 
 # Run this repository's own checks, with no sibling present.
 test:

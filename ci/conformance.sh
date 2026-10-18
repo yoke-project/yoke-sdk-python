@@ -59,4 +59,6 @@ run_suite() {
 
 (cd "$root" && just build > /dev/null)
 mkdir -p "$results"
-run_suite "$(cd "$root" && just --evaluate venv)/bin/yoke-python-plugin-harness" | tee "$results/conformance.txt"
+bin="$(cd "$root" && just --evaluate venv)/bin"
+run_suite "$bin/yoke-python-plugin-harness" | tee "$results/conformance.txt"
+run_suite "$bin/yoke-python-interface-harness" | tee -a "$results/conformance.txt"

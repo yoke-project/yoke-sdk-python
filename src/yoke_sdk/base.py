@@ -24,12 +24,35 @@ class Error(Exception):
     """
 
 
-class Refusal(Error):
-    """A refusal as it travels: a code from the one namespace, a message for a person, and the stage
-    where there is one."""
+@dataclasses.dataclass(frozen=True)
+class Subject:
+    """What a refusal names when it is about one subject: a kind, an identity, and a unit's life where
+    one is named."""
 
-    def __init__(self, code, message, stage=None):
+    kind: str
+    identity: str
+    incarnation: int = 0
+
+
+@dataclasses.dataclass(frozen=True)
+class Suspension:
+    """Why a channel's operation was withdrawn: the grade it is suspended in, and the channel that
+    prevails."""
+
+    grade: str
+    by: str
+
+
+class Refusal(Error):
+    """A refusal as it travels: a code from the one namespace, a message for a person, the stage where
+    there is one, and what it names where it names anything: a subject, an object withheld or
+    undeclared (`item`), or the suspension of a channel."""
+
+    def __init__(
+        self, code, message, stage=None, subject=None, item=None, suspension=None
+    ):
         self.code, self.message, self.stage = code, message, stage
+        self.subject, self.item, self.suspension = subject, item, suspension
         where = f" at {stage}" if stage else ""
         super().__init__(f"{code}{where}: {message}")
 

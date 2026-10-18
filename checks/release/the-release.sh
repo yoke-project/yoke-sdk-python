@@ -16,13 +16,16 @@ check_one_wheel_published() {
   listed="$(python -c 'import sys, zipfile; print("\n".join(zipfile.ZipFile(sys.argv[1]).namelist()))' "$out/yoke_sdk-$version-py3-none-any.whl")"
   rm -rf "$out"
   local file
-  for file in yoke_sdk/__init__.py yoke_sdk/base.py yoke_sdk/plugin.py "yoke_sdk-$version.dist-info/licenses/LICENSE" "yoke_sdk-$version.dist-info/licenses/NOTICE"; do
+  for file in yoke_sdk/__init__.py yoke_sdk/base.py yoke_sdk/plugin.py yoke_sdk/interface.py "yoke_sdk-$version.dist-info/licenses/LICENSE" "yoke_sdk-$version.dist-info/licenses/NOTICE"; do
     grep -qx "$file" <<<"$listed" || { echo "the wheel does not carry $file"; return 1; }
   done
   local stray
   stray="$(grep -E 'harness|\.std\.md$|entry_points\.txt$' <<<"$listed" || true)"
   [[ -z "$stray" ]] || { echo "the wheel carries $stray"; return 1; }
-  grep -qF 'Private :: Do Not Upload' "$root/harness/pyproject.toml" 2>/dev/null || { echo "the harness is not a project that says it is never uploaded"; return 1; }
+  local harness
+  for harness in harness interface-harness; do
+    grep -qF 'Private :: Do Not Upload' "$root/$harness/pyproject.toml" 2>/dev/null || { echo "the $harness is not a project that says it is never uploaded"; return 1; }
+  done
   if grep -qF 'Private :: Do Not Upload' "$root/pyproject.toml"; then echo "the wheel's project says it is never uploaded"; return 1; fi
 }
 
