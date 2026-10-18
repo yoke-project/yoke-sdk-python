@@ -23,6 +23,7 @@ from yoke.interface.v1 import operations_pb2
 from google.protobuf import timestamp_pb2
 
 from yoke_sdk import base
+from yoke_sdk._tls import carry
 from yoke_sdk.interface import Attachment
 
 
@@ -107,22 +108,7 @@ class Terminator:
         )
         local = socket.socket(socket.AF_UNIX)
         local.connect(self._upstream)
-
-        def carry(source, sink):
-            try:
-                while data := source.recv(1 << 16):
-                    sink.sendall(data)
-            except OSError:
-                pass
-            finally:
-                for end in (source, sink):
-                    try:
-                        end.shutdown(socket.SHUT_RDWR)
-                    except OSError:
-                        pass
-
-        threading.Thread(target=carry, args=(tls, local), daemon=True).start()
-        carry(local, tls)
+        carry(tls, local)
 
     def close(self):
         self._listener.close()

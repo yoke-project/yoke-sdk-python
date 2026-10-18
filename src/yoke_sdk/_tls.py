@@ -5,6 +5,7 @@ carries the plaintext between the TLS connection and a socket in a directory onl
 and gRPC speaks HTTP/2 on that socket as on any local one. Never installed."""
 
 import os
+import select
 import shutil
 import socket
 import ssl
@@ -21,6 +22,60 @@ def _host_of(address):
     return host.strip("[]")
 
 
+def carry(tls, plain):
+    """Carries bytes both ways between a TLS connection and a plain socket until either side ends, and
+    then lets both go. One thread does all of it, since an `ssl` connection cannot be read in one thread
+    while it is written in another."""
+    tls.setblocking(False)
+    plain.setblocking(False)
+    up = down = b""  # waiting to go to the TLS side, and to the plain one
+    try:
+        while True:
+            reading = [] if up else [plain]
+            if not down:
+                reading.append(tls)
+            writing = ([tls] if up else []) + ([plain] if down else [])
+            # A TLS write may need a read first, and decrypted bytes may be waiting that no socket shows.
+            if up and tls not in reading:
+                reading.append(tls)
+            timeout = 0 if tls.pending() and not down else 0.2
+            ready_r, ready_w, _ = select.select(reading, writing, [], timeout)
+            if plain in ready_r and not up:
+                data = plain.recv(1 << 16)
+                if not data:
+                    return
+                up = data
+            if not down and (tls in ready_r or tls.pending()):
+                try:
+                    data = tls.recv(1 << 16)
+                except (ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                    data = None
+                except ssl.SSLZeroReturnError:
+                    return
+                if data == b"":
+                    return
+                if data:
+                    down = data
+            if up:
+                try:
+                    up = up[tls.send(up) :]
+                except (ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                    pass
+            if down:
+                try:
+                    down = down[plain.send(down) :]
+                except BlockingIOError:
+                    pass
+    except (OSError, ssl.SSLError, ValueError):
+        pass
+    finally:
+        for end in (plain, tls):
+            try:
+                end.close()
+            except OSError:
+                pass
+
+
 class Tunnel:
     """The TLS connection to a Core, and the local socket gRPC is to speak on."""
 
@@ -30,48 +85,18 @@ class Tunnel:
         self._listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._listener.bind(self.path)
         self._listener.listen(1)
-        self._done = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def _run(self):
-        """Accepts the one local connection gRPC makes, and carries bytes both ways until either side
-        ends; then ends the other."""
+        """Accepts the one local connection gRPC makes, and carries bytes until either side ends."""
         try:
             local, _ = self._listener.accept()
         except OSError:
             return
         # Only one connection is ever carried: nothing reconnects.
         self._listener.close()
-        upstream = threading.Thread(target=self._up, args=(local,), daemon=True)
-        upstream.start()
-        try:
-            while data := self._tls.recv(1 << 16):
-                local.sendall(data)
-        except (OSError, ssl.SSLError):
-            pass
-        finally:
-            self._end(local)
-
-    def _up(self, local):
-        try:
-            while data := local.recv(1 << 16):
-                self._tls.sendall(data)
-        except (OSError, ssl.SSLError):
-            pass
-        finally:
-            self._end(local)
-
-    def _end(self, local):
-        for end in (local, self._tls):
-            try:
-                end.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            try:
-                end.close()
-            except OSError:
-                pass
+        carry(self._tls, local)
 
     def close(self):
         """Lets everything go."""
