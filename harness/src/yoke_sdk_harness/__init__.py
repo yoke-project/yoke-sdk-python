@@ -150,7 +150,8 @@ class _Harness:
             elif isinstance(event, plugin.Activated):
                 kind, fields = "activated", {
                     "stream": event.stream,
-                    "transport": event.transport,
+                    # The suite names the transports `ordered`, `framed` and `shared_object`.
+                    "transport": event.transport.replace(" ", "_"),
                 }
             elif isinstance(event, plugin.Stopped):
                 kind, fields = "stopped", {"stream": event.stream}

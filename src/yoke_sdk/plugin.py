@@ -27,7 +27,7 @@ from yoke.plugin.v1 import (
     session_pb2_grpc,
 )
 
-from yoke_sdk import __version__
+from yoke_sdk import __version__, _ring
 from yoke_sdk.base import (
     PLUGIN_CONTRACT,
     Envelopes,
@@ -290,7 +290,7 @@ class Unit:
             return
         self._ended = True
         for flow in self._active.values():
-            flow.conn.close()
+            flow.close()
         self._active.clear()
         if self._outbound is not None:
             self._outbound.put_nowait(_END)
@@ -341,7 +341,7 @@ class Unit:
                             continue
                         former = self._active.pop(a.stream, None)
                         if former is not None:
-                            former.conn.close()
+                            former.close()
                         self._active[a.stream] = flow
                         self._send(
                             "ack",
@@ -354,7 +354,7 @@ class Unit:
                     elif kind == "stop":
                         flow = self._active.pop(e.control.stop.stream, None)
                         if flow is not None:
-                            flow.conn.close()
+                            flow.close()
                         self._send(
                             "ack",
                             families_pb2.Ack(outcome=families_pb2.Ack.OUTCOME_DONE),
@@ -479,6 +479,18 @@ class Unit:
             )
         with flow.lock:
             flow.sequence += 1
+            if flow.ring is not None:
+                try:
+                    flow.ring.publish(time.time_ns(), payload)
+                except ValueError as failure:
+                    # Refused as an oversized datagram is on the framed transport: the transport took
+                    # nothing.
+                    flow.sequence -= 1
+                    raise Refusal(
+                        "stream.inactive",
+                        f"the transport of {stream} took nothing: {failure}",
+                    ) from failure
+                return
             if flow.framed:
                 message = struct.pack("<QQ", flow.sequence, time.time_ns()) + payload
             else:
@@ -496,12 +508,22 @@ class Unit:
 
 @dataclasses.dataclass
 class _Flow:
-    """One activated stream: the library's connection to its transport, and the last sequence."""
+    """One activated stream: the library's connection to its transport, and the last sequence. On the
+    shared ring the connection is held for the stream's life and the frames go into the ring."""
 
     conn: socket.socket
     framed: bool
     sequence: int = 0
+    ring: _ring.Writer = None
     lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
+
+    def close(self):
+        """Lets the transport go, and the ring's mapping with it, once nothing is being emitted on it."""
+        with self.lock:
+            self.conn.close()
+            if self.ring is not None:
+                self.ring.close()
+                self.ring = None
 
 
 def _connect(a):
@@ -511,6 +533,8 @@ def _connect(a):
         kind, framed = socket.SOCK_SEQPACKET, False
     elif a.transport == Activate.TRANSPORT_FRAMED:
         kind, framed = socket.SOCK_DGRAM, True
+    elif a.transport == Activate.TRANSPORT_SHARED_OBJECT:
+        return _connect_ring(a)
     else:
         raise OSError(f"the transport {a.transport} is not one this library reaches")
     conn = socket.socket(socket.AF_UNIX, kind)
@@ -520,6 +544,28 @@ def _connect(a):
         conn.close()
         raise
     return _Flow(conn, framed)
+
+
+def _connect_ring(a):
+    """Reaches a stream's ring: connects to the socket the activation names and takes the descriptor the
+    Core hands the first connection, on one byte."""
+    conn = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    try:
+        conn.connect(a.address)
+        _, fds, _, _ = socket.recv_fds(conn, 1, 1)
+        if len(fds) != 1:
+            raise OSError(f"the ring of {a.stream}: no descriptor was handed")
+        try:
+            ring = _ring.Writer(fds[0])
+        except ValueError as failure:
+            raise OSError(f"the ring of {a.stream}: {failure}") from failure
+        finally:
+            for fd in fds:
+                os.close(fd)
+    except OSError:
+        conn.close()
+        raise
+    return _Flow(conn, False, ring=ring)
 
 
 async def start(declaration, getenv=os.environ.get):
@@ -550,6 +596,9 @@ async def start(declaration, getenv=os.environ.get):
                 language="python",
                 sdk_line=SDK_LINE,
                 declared=declaration._surface(),
+                # This library writes the shared ring, so a stream of it that tolerates loss may be
+                # carried there.
+                transports=[families_pb2.Control.Activate.TRANSPORT_SHARED_OBJECT],
             )
         )
     except Exception as failure:
