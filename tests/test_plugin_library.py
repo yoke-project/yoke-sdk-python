@@ -2,12 +2,14 @@
 arrives and says what it is told to."""
 
 import asyncio
+import mmap
 import os
 import pathlib
 import shutil
 import socket
 import struct
 import tempfile
+import threading
 import time
 import unittest
 
@@ -586,6 +588,70 @@ capabilities:
         self.assertIsNone(
             await asyncio.wait_for(self.packets.get(), 2),
             "a packet reached the socket after the stop",
+        )
+
+    def core_ring(self, slots, capacity):
+        """A ring of layout 1 behind a packet socket, as the Core creates one: the first connection is
+        handed the descriptor that writes, on one byte."""
+        size = 64 + slots * (32 + capacity)
+        fd = os.memfd_create("yoke-test", os.MFD_CLOEXEC)
+        self.addCleanup(os.close, fd)
+        os.ftruncate(fd, size)
+        mem = mmap.mmap(fd, size)
+        self.addCleanup(mem.close)
+        mem[0:8] = b"YOKERING"
+        struct.pack_into("<III", mem, 8, 1, slots, capacity)
+        path = os.path.join(self.dir, "ring.sock")
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        listener.bind(path)
+        listener.listen(1)
+        self.addCleanup(listener.close)
+
+        def hand():
+            conn, _ = listener.accept()
+            socket.send_fds(conn, [b"\0"], [fd])
+            self.held = conn  # the Core keeps it open for the life of the stream
+
+        thread = threading.Thread(target=hand, daemon=True)
+        thread.start()
+        return path, mem
+
+    # std: yoke-sdk-python:the-plugin-library.17
+    async def test_activated_on_the_ring_emit_publishes_into_it(self):
+        Activate = families_pb2.Control.Activate
+        channel = await self.bench(accepted())
+        unit = await self.start()
+        await self.opened()
+        self.assertIn(
+            Activate.TRANSPORT_SHARED_OBJECT,
+            channel.registrations[0].transports,
+            "the registration does not offer the shared ring",
+        )
+        slots, capacity = 4, 64
+        path, mem = self.core_ring(slots, capacity)
+        await self.activate(
+            "c-1", "station.preview", Activate.TRANSPORT_SHARED_OBJECT, path
+        )
+        self.assertEqual(
+            (await self.acked("c-1")).outcome, families_pb2.Ack.OUTCOME_DONE
+        )
+        a = await self.handed(unit, plugin.Activated)
+        self.assertEqual((a.stream, a.transport), ("station.preview", "shared object"))
+        for i in (1, 2, 3):
+            await unit.emit("station.preview", bytes([i, 0xDD]))
+        self.assertEqual(struct.unpack_from("<Q", mem, 24)[0], 3)
+        for n in (1, 2, 3):
+            at = 64 + ((n - 1) % slots) * (32 + capacity)
+            sequence, clock, length = struct.unpack_from("<QQI", mem, at)
+            self.assertEqual((sequence, length), (n, 2), f"frame {n}")
+            self.assertGreater(clock, 0, f"frame {n} has no clock")
+            self.assertEqual(bytes(mem[at + 32 : at + 34]), bytes([n, 0xDD]))
+        with self.assertRaises(base.Refusal) as refused:
+            await unit.emit("station.preview", bytes(65))
+        self.assertEqual(refused.exception.code, "stream.inactive")
+        self.assertIn("64", str(refused.exception))
+        self.assertEqual(
+            struct.unpack_from("<Q", mem, 24)[0], 3, "the refused frame was published"
         )
 
 
