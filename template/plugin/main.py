@@ -1,5 +1,6 @@
 """@YOKE_PROGRAM@: a Yoke Plugin. Its Manifest is kept beside the source, as @YOKE_ID@.yaml, and is what
-`main.py --manifest` prints; the continuous integration of this project compares the two."""
+`main.py --manifest` prints; the continuous integration of this project compares the two.
+"""
 
 import asyncio
 import signal
