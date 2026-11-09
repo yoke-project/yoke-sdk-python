@@ -1,0 +1,9 @@
+plugin: 1
+id: @YOKE_ID@
+language: python
+program: @YOKE_PROGRAM@
+manifest: plugin/@YOKE_ID@.yaml
+build:
+  in: plugin/
+  run: 'engine="${CONTAINER_ENGINE:-$(command -v podman || command -v docker)}"; [ -n "$engine" ] || { echo "a Python Plugin builds an image: no container engine is on PATH; name one with CONTAINER_ENGINE" >&2; exit 1; }; [ "$YOKE_ARCH" = "$(uname -m)" ] || { echo "building for $YOKE_ARCH on $(uname -m) is not done here: build on a machine of that architecture" >&2; exit 1; }; i=localhost/yoke-plugin-@YOKE_PROGRAM@; "$engine" build -q -t "$i" -f Containerfile . && case "$engine" in *podman*) "$engine" save --format oci-archive -o "$YOKE_OUT/@YOKE_PROGRAM@" "$i" ;; *) "$engine" save -o "$YOKE_OUT/@YOKE_PROGRAM@" "$i" ;; esac && "$engine" rmi "$i"'
+architectures: [x86_64, aarch64]
