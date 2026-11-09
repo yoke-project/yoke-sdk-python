@@ -1,0 +1,20 @@
+# The Manifest kept in plugin/ is what the program prints, at every change.
+name: manifest
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  manifest:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: the Manifest kept is the Manifest printed
+        working-directory: plugin
+        run: |
+          pip install -r requirements.txt
+          python main.py --manifest | diff -u @YOKE_ID@.yaml -
