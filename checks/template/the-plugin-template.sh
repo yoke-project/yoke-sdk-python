@@ -34,7 +34,10 @@ check_generated_the_plugin_prints_the_manifest_it_keeps() {
   cp "$pt_root/template/plugin/main.py" "$dir/main.py"
   sed -i 's/@YOKE_ID@/com.example.greeter/g; s/@YOKE_PROGRAM@/greeter/g' "$dir/main.py"
   sed 's/@YOKE_ID@/com.example.greeter/g' "$pt_root/template/plugin/@YOKE_ID@.yaml" > "$dir/kept"
-  PYTHONPATH="$pt_root/src" python "$dir/main.py" --manifest > "$dir/printed" 2> "$dir/err" || { echo "it does not run: $(tail -3 "$dir/err")"; verdict=1; }
+  # A virtual environment holding this checkout's library and what it requires, which nothing here assumes installed.
+  python -m venv "$dir/env" && "$dir/env/bin/pip" install -q --disable-pip-version-check "$pt_root" > "$dir/err" 2>&1 \
+    || { echo "the library does not install: $(tail -3 "$dir/err")"; rm -rf "$dir"; return 1; }
+  "$dir/env/bin/python" "$dir/main.py" --manifest > "$dir/printed" 2> "$dir/err" || { echo "it does not run: $(tail -3 "$dir/err")"; verdict=1; }
   cmp -s "$dir/kept" "$dir/printed" || { echo "the Manifest printed differs from the one kept"; verdict=1; }
   rm -rf "$dir"; return "$verdict"
 }
