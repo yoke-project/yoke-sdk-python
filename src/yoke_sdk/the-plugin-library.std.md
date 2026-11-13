@@ -226,3 +226,16 @@
 | **Action** | read the registration the channel received; activate a stream on the shared object at that socket; emit three payloads; then one larger than a slot |
 | **Expected** | the registration offers the shared object; the activation is acknowledged done and the author is handed it, naming the transport `shared object`; frames 1, 2 and 3 are in their slots with the payloads emitted, a clock each, and the count published is 3; the payload larger than a slot is refused with `stream.inactive`, naming the capacity, and nothing more is published |
 
+
+## yoke-sdk-python:the-plugin-library.18 — a question or a command is failed with a code and a message, correlated to it
+
+| Field | Value |
+| --- | --- |
+| **Cites** | specs/50.61 · specs/50.68 · specs/50.69 · arch/50-plugin-surface/05 §An error answering the Core's message closes the exchange |
+| **Level** | L1 |
+| **Method** | test |
+| **Not applicable in** | — |
+| **Label** | blocking |
+| **Precondition** | an open Session |
+| **Action** | the channel sends a command `calibrate` and then a question `head-status`; the author fails the command, named by its identity, and the question, named by itself, each with a code and a message |
+| **Expected** | two error envelopes reach the channel, one correlated to each message's identity, each carrying the code and the message the author gave. The act Go, C, C++ and Rust offered and Python did not: a hands-on pass found a Python Plugin could answer a question but never refuse it |

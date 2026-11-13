@@ -405,6 +405,38 @@ capabilities:
         answer = await self.received(lambda e: payload(e) == "query")
         self.assertEqual(answer.correlation_id, "c-2")
 
+    # std: yoke-sdk-python:the-plugin-library.18
+    async def test_a_question_or_a_command_is_failed_correlated(self):
+        await self.bench(accepted())
+        unit = await self.start()
+        await self.opened()
+        await self.send(
+            message_id="c-1",
+            control=families_pb2.Control(
+                command=families_pb2.Control.Command(type="calibrate")
+            ),
+        )
+        await self.send(
+            message_id="c-2",
+            query=families_pb2.Query(
+                question=families_pb2.Query.Question(type="head-status")
+            ),
+        )
+        command = await asyncio.wait_for(unit.next(), 2)
+        question = await asyncio.wait_for(unit.next(), 2)
+        await unit.fail(command.id, "calibration.stuck", "the arm did not move")
+        await unit.fail(question, "head.unknown", "no head is fitted")
+        failed = await self.received(
+            lambda e: payload(e) == "error" and e.correlation_id == "c-1"
+        )
+        self.assertEqual(failed.error.code, "calibration.stuck")
+        self.assertEqual(failed.error.message, "the arm did not move")
+        failed = await self.received(
+            lambda e: payload(e) == "error" and e.correlation_id == "c-2"
+        )
+        self.assertEqual(failed.error.code, "head.unknown")
+        self.assertEqual(failed.error.message, "no head is fitted")
+
     # std: yoke-sdk-python:the-plugin-library.11
     async def test_an_occurrence_carries_the_authors_severity_or_is_refused(self):
         channel = await self.bench(accepted())
