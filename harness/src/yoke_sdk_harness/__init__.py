@@ -94,7 +94,7 @@ class _Harness:
                     "withheld": _scope(a.withheld),
                 }
             }
-        known = {"close", "emit", "report-health", "report", "ack", "answer"}
+        known = {"close", "emit", "report-health", "report", "ack", "answer", "fail"}
         if self.unit is None:
             return (
                 {"value": {"failed": True, "started": False}}
@@ -128,6 +128,11 @@ class _Harness:
                 if question is None:
                     raise base.Misuse("no such question was surfaced")
                 await self.unit.answer(question, args.get("payload", "").encode())
+            elif verb == "fail":
+                # A question or a command the Core sent, failed with a code and a message, correlated to it.
+                await self.unit.fail(
+                    args.get("about", ""), args.get("code", ""), args.get("message", "")
+                )
             else:
                 return {"unrecognised": True}
         except base.Error as error:

@@ -438,6 +438,18 @@ class Unit:
             to=question.id,
         )
 
+    async def fail(self, about, code, message=""):
+        """Says what went wrong with a message the Core sent, correlated to it: a code in the unit's own
+        terms and a message for a person. ``about`` is the Command or the Question, or its identity. It
+        is the unit's answer, so the exchange closes and whoever asked is refused with the code carried;
+        a question failed is not also answered."""
+        to = getattr(about, "id", about)
+        if not to:
+            raise Misuse(
+                "a failure answers a message the Core sent, and none was named"
+            )
+        self._send("error", families_pb2.Error(code=code, message=message), to=to)
+
     async def report(self, occurrence, severity, line="", detail=b""):
         """Reports an occurrence of a declared class, with the author's severity. With none it is
         refused: the library never states one on the author's behalf."""
