@@ -47,7 +47,9 @@ def declaration():
     # refuses a Manifest key it does not know.
     if "max_frame" not in os.environ.get("CONFORMANCE_FEATURES", "").split(","):
         d.streams = [s for s in d.streams if s.id != "conformance.large"]
-        d.capabilities = [c for c in d.capabilities if c.governs.stream != "conformance.large"]
+        d.capabilities = [
+            c for c in d.capabilities if c.governs.stream != "conformance.large"
+        ]
     return d
 
 
@@ -104,7 +106,16 @@ class _Harness:
                     "withheld": _scope(a.withheld),
                 }
             }
-        known = {"close", "emit", "emit-sized", "report-health", "report", "ack", "answer", "fail"}
+        known = {
+            "close",
+            "emit",
+            "emit-sized",
+            "report-health",
+            "report",
+            "ack",
+            "answer",
+            "fail",
+        }
         if self.unit is None:
             return (
                 {"value": {"failed": True, "started": False}}
