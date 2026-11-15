@@ -686,7 +686,6 @@ capabilities:
             struct.unpack_from("<Q", mem, 24)[0], 3, "the refused frame was published"
         )
 
-
     # std: yoke-sdk-python:the-plugin-library.18
     async def test_on_a_stream_socket_emit_writes_each_message_after_its_length(self):
         Activate = families_pb2.Control.Activate
@@ -731,8 +730,12 @@ capabilities:
             Activate.TRANSPORT_FRAMED_STREAM,
         ):
             self.assertIn(t, offered)
-        await self.activate("c-1", "station.preview", Activate.TRANSPORT_FRAMED_STREAM, path)
-        self.assertEqual((await self.acked("c-1")).outcome, families_pb2.Ack.OUTCOME_DONE)
+        await self.activate(
+            "c-1", "station.preview", Activate.TRANSPORT_FRAMED_STREAM, path
+        )
+        self.assertEqual(
+            (await self.acked("c-1")).outcome, families_pb2.Ack.OUTCOME_DONE
+        )
         a = await self.handed(unit, plugin.Activated)
         self.assertEqual(a.transport, "framed stream")
         await unit.emit("station.preview", bytes(600 << 10))

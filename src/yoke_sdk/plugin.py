@@ -557,14 +557,19 @@ def _connect(a):
         kind, framed = socket.SOCK_DGRAM, True
     elif a.transport == Activate.TRANSPORT_SHARED_OBJECT:
         return _connect_ring(a)
-    elif a.transport in (Activate.TRANSPORT_ORDERED_STREAM, Activate.TRANSPORT_FRAMED_STREAM):
+    elif a.transport in (
+        Activate.TRANSPORT_ORDERED_STREAM,
+        Activate.TRANSPORT_FRAMED_STREAM,
+    ):
         conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             conn.connect(a.address)
         except OSError:
             conn.close()
             raise
-        return _Flow(conn, a.transport == Activate.TRANSPORT_FRAMED_STREAM, lengthed=True)
+        return _Flow(
+            conn, a.transport == Activate.TRANSPORT_FRAMED_STREAM, lengthed=True
+        )
     else:
         raise OSError(f"the transport {a.transport} is not one this library reaches")
     conn = socket.socket(socket.AF_UNIX, kind)
