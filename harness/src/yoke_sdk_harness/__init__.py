@@ -14,11 +14,12 @@ from yoke_sdk import base, plugin
 def declaration():
     """What the harness declares: one object of every kind, a stream on each transport, each governed
     by a capability."""
-    return plugin.Declaration(
+    d = plugin.Declaration(
         id="com.yoke.conformance.python",
         streams=[
             plugin.Stream("conformance.data"),
             plugin.Stream("conformance.frames", tolerates_loss=True),
+            plugin.Stream("conformance.large", tolerates_loss=True, max_frame=4 << 20),
         ],
         commands=["calibrate"],
         queries=["status"],
@@ -31,6 +32,9 @@ def declaration():
                 "stream.frames.publish", plugin.Object(stream="conformance.frames")
             ),
             plugin.Capability(
+                "stream.large.publish", plugin.Object(stream="conformance.large")
+            ),
+            plugin.Capability(
                 "command.calibrate.accept", plugin.Object(command="calibrate")
             ),
             plugin.Capability("query.status.answer", plugin.Object(query="status")),
@@ -39,6 +43,12 @@ def declaration():
             ),
         ],
     )
+    # A stream's largest frame is declared only to a suite that names it: a Core of an earlier release
+    # refuses a Manifest key it does not know.
+    if "max_frame" not in os.environ.get("CONFORMANCE_FEATURES", "").split(","):
+        d.streams = [s for s in d.streams if s.id != "conformance.large"]
+        d.capabilities = [c for c in d.capabilities if c.governs.stream != "conformance.large"]
+    return d
 
 
 def _refusal(error):
@@ -94,7 +104,7 @@ class _Harness:
                     "withheld": _scope(a.withheld),
                 }
             }
-        known = {"close", "emit", "report-health", "report", "ack", "answer", "fail"}
+        known = {"close", "emit", "emit-sized", "report-health", "report", "ack", "answer", "fail"}
         if self.unit is None:
             return (
                 {"value": {"failed": True, "started": False}}
@@ -107,6 +117,12 @@ class _Harness:
             elif verb == "emit":
                 await self.unit.emit(
                     args.get("stream", ""), args.get("payload", "").encode()
+                )
+            elif verb == "emit-sized":
+                # A payload of the size asked, byte i being i mod 251, as the suite checks it.
+                size = int(args.get("bytes", 0))
+                await self.unit.emit(
+                    args.get("stream", ""), bytes(i % 251 for i in range(size))
                 )
             elif verb == "report-health":
                 await self.unit.health(int(args.get("grade", 0)), args.get("line", ""))
