@@ -237,9 +237,19 @@ class _Harness:
             return {"value": _plain(ack)}
         if verb == "reclaim":
             return {"value": _plain(await a.reclaim())}
-        delivery = await a.subscribe_stream(_text(args, "unit"), _text(args, "stream"))
+        # The suite may name what the library is to read; otherwise it names everything it reads.
+        reads = args.get("reads") if isinstance(args.get("reads"), list) else None
+        delivery = await a.subscribe_stream(
+            _text(args, "unit"), _text(args, "stream"), reads
+        )
         self.tasks.append(asyncio.create_task(self.delivered(delivery)))
-        return {"value": {"delivery": delivery.id, "flowing": delivery.flowing}}
+        return {
+            "value": {
+                "delivery": delivery.id,
+                "flowing": delivery.flowing,
+                "arrives": delivery.arrives,
+            }
+        }
 
     async def close(self):
         for task in self.tasks:

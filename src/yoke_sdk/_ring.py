@@ -91,3 +91,59 @@ class Writer:
         """Lets the mapping go."""
         self._wake = None
         self._mem.close()
+
+
+class Reader:
+    """One reader of a ring, at its own pace: a client the Core handed the ring for reading alone. It reads
+    at a bounded interval rather than waiting on the shared word, which the layout allows a reader.
+    """
+
+    def __init__(self, fd):
+        """Maps the ring a descriptor names, for reading alone, and reads its geometry from its header."""
+        size = os.fstat(fd).st_size
+        if size < _HEADER:
+            raise ValueError(f"the ring is {size} bytes, shorter than its header")
+        self._mem = mmap.mmap(fd, size, prot=mmap.PROT_READ)
+        version, slots, capacity = struct.unpack_from("<III", self._mem, 8)
+        if (
+            self._mem[:8] != _MAGIC
+            or version != _VERSION
+            or slots == 0
+            or _HEADER + slots * (_SLOT_HEADER + capacity) > size
+        ):
+            self._mem.close()
+            raise ValueError("the memory handed is not a ring this library reads")
+        self._slots, self._capacity, self._next = slots, capacity, 1
+
+    def next(self, interval):
+        """The next frame the reader can still read, as (sequence, clock, payload), or None when nothing
+        was published within the interval: a lap by the producer, or a slot overwritten while it was
+        copied, is a gap the sequence shows."""
+        import time
+
+        deadline = time.monotonic() + interval
+        mem = self._mem
+        while True:
+            published = struct.unpack_from("<Q", mem, _OFF_PUBLISHED)[0]
+            if published < self._next:
+                if time.monotonic() >= deadline:
+                    return None
+                time.sleep(0.002)
+                continue
+            if published >= self._slots:
+                self._next = max(self._next, published - self._slots + 1)
+            n = self._next
+            self._next += 1
+            at = _HEADER + ((n - 1) % self._slots) * (_SLOT_HEADER + self._capacity)
+            before = struct.unpack_from("<Q", mem, at)[0]
+            clock, length = struct.unpack_from("<QI", mem, at + 8)
+            length = min(length, self._capacity)
+            payload = bytes(mem[at + _SLOT_HEADER : at + _SLOT_HEADER + length])
+            after = struct.unpack_from("<Q", mem, at)[0]
+            if before != n or after != n:
+                continue
+            return n, clock, payload
+
+    def close(self):
+        """Lets the mapping go."""
+        self._mem.close()

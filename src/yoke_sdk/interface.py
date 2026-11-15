@@ -19,6 +19,7 @@ import asyncio
 import dataclasses
 import os
 import socket
+import threading
 import struct
 
 import grpc
@@ -31,7 +32,7 @@ from yoke.interface.v1 import (
     operations_pb2,
 )
 
-from yoke_sdk import _tls
+from yoke_sdk import _ring, _tls
 from yoke_sdk.base import (
     Error,
     Misuse,
@@ -459,15 +460,55 @@ class Attachment:
             raise
         return Subscription(call, self, queue, answer.subscribe, False)
 
-    async def subscribe_stream(self, unit, stream):
-        """Asks for a copy of a unit's stream, and opens it where the answer says it arrives: a
-        per-subscriber socket the Core listens on, or the attachment's own connection.
+    async def subscribe_stream(self, unit, stream, reads=None):
+        """Asks for a copy of a unit's stream, naming the deliveries this library reads — by default a
+        stream socket and the stream's ring itself — and opens it where the answer says it arrives: a
+        per-subscriber socket the Core listens on, a stream socket, the ring, or the attachment's own
+        connection. `reads` names a choice of "stream_socket" and "shared_object"; none, the packet socket.
         """
+        if reads is None:
+            reads = ["stream_socket", "shared_object"]
+        Reads = operations_pb2.UnitStream
+        names = {
+            "stream_socket": Reads.READS_STREAM_SOCKET,
+            "shared_object": Reads.READS_SHARED_OBJECT,
+        }
         answer = await self._ask(
-            "stream_subscribe", operations_pb2.UnitStream(unit=unit, stream=stream)
+            "stream_subscribe",
+            operations_pb2.UnitStream(
+                unit=unit, stream=stream, reads=[names[r] for r in reads if r in names]
+            ),
         )
         d = answer.stream_subscribe
         arrives = d.WhichOneof("arrives")
+        if arrives == "stream_socket":
+            conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                conn.connect(d.stream_socket)
+            except OSError as failure:
+                conn.close()
+                raise TransportError(
+                    f"the delivery's socket {d.stream_socket} cannot be reached: {failure}"
+                ) from failure
+            conn.setblocking(False)
+            return Delivery(d.delivery, d.flowing, self, conn, None, "stream_socket")
+        if arrives == "shared":
+            conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                conn.connect(d.shared)
+            except OSError as failure:
+                conn.close()
+                raise TransportError(
+                    f"the delivery's lifeline {d.shared} cannot be reached: {failure}"
+                ) from failure
+            frames = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+            threading.Thread(
+                target=_read_the_ring, args=(conn, frames, loop), daemon=True
+            ).start()
+            delivery = Delivery(d.delivery, d.flowing, self, None, None, "shared")
+            delivery._ring_frames, delivery._lifeline = frames, conn
+            return delivery
         if arrives == "socket":
             conn = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
             try:
@@ -478,14 +519,72 @@ class Attachment:
                     f"the delivery's socket {d.socket} cannot be reached: {failure}"
                 ) from failure
             conn.setblocking(False)
-            return Delivery(d.delivery, d.flowing, self, conn, None)
+            return Delivery(d.delivery, d.flowing, self, conn, None, "socket")
         if arrives == "connection":
             return Delivery(
-                d.delivery, d.flowing, self, None, self._register(d.delivery)
+                d.delivery,
+                d.flowing,
+                self,
+                None,
+                self._register(d.delivery),
+                "connection",
             )
         raise TransportError(
             f"the delivery {d.delivery} arrives where this projection cannot read it: {arrives}"
         )
+
+
+def _read_the_ring(lifeline, frames, loop):
+    """Reads a shared delivery on a thread of its own: the lifeline brings each activation's ring as a
+    descriptor on one byte and each stop as a message of length zero, and its closing is the end; between
+    them, the ring is read frame by frame."""
+
+    def put(item):
+        loop.call_soon_threadsafe(frames.put_nowait, item)
+
+    ring = None
+    try:
+        while True:
+            lifeline.settimeout(0.02 if ring is not None else 1.0)
+            try:
+                head, fds, _, _ = socket.recv_fds(lifeline, 4, 1)
+            except (socket.timeout, BlockingIOError):
+                head, fds = None, []
+            if head is not None:
+                if not head:
+                    put(None)
+                    return
+                lifeline.settimeout(5)
+                while len(head) < 4:
+                    more = lifeline.recv(4 - len(head))
+                    if not more:
+                        put(None)
+                        return
+                    head += more
+                (length,) = struct.unpack("<I", head)
+                if length == 0:
+                    if ring is not None:
+                        ring.close()
+                    ring = None
+                else:
+                    body, more_fds, _, _ = socket.recv_fds(lifeline, length, 1)
+                    fds = fds or more_fds
+                    if ring is not None:
+                        ring.close()
+                    ring = None
+                    if fds:
+                        try:
+                            ring = _ring.Reader(fds[0])
+                        finally:
+                            os.close(fds[0])
+            if ring is not None:
+                while True:
+                    f = ring.next(0.05)
+                    if f is None:
+                        break
+                    put(Frame(f[0], f[1], f[2]))
+    except OSError:
+        put(None)
 
 
 def _dial(address, tls):
@@ -567,13 +666,44 @@ class Delivery:
     """A copy of a stream delivered to this client, read where the answer said it arrives. `flowing` is
     whether the stream was flowing when the subscription was answered."""
 
-    def __init__(self, id, flowing, attachment, conn, queue):
-        self.id, self.flowing = id, flowing
+    def __init__(self, id, flowing, attachment, conn, queue, arrives="socket"):
+        self.id, self.flowing, self.arrives = id, flowing, arrives
+        """`arrives` is where the Core said the delivery arrives: socket, stream_socket, shared or
+        connection."""
         self._a, self._conn, self._queue = attachment, conn, queue
+        self._ring_frames, self._lifeline = None, None
 
     async def next(self):
         """The next frame, in order; None once the delivery ended, and an error that it ended once the
         attachment did."""
+        if self._ring_frames is not None:
+            return await self._ring_frames.get()
+        if self._conn is not None and self.arrives == "stream_socket":
+            loop = asyncio.get_running_loop()
+
+            async def exactly(n):
+                got = b""
+                while len(got) < n:
+                    try:
+                        more = await loop.sock_recv(self._conn, n - len(got))
+                    except OSError:
+                        more = b""
+                    if not more:
+                        return None
+                    got += more
+                return got
+
+            head = await exactly(4)
+            body = await exactly(struct.unpack("<I", head)[0]) if head else None
+            if body is None:
+                self._conn.close()
+                return None
+            if len(body) < _HEADER:
+                raise TransportError(
+                    f"a frame of {len(body)} bytes is shorter than its header"
+                )
+            sequence, sent_at = struct.unpack_from("<QQ", body)
+            return Frame(sequence, sent_at, body[_HEADER:])
         if self._conn is not None:
             loop = asyncio.get_running_loop()
             try:
@@ -612,5 +742,7 @@ class Delivery:
         finally:
             if self._conn is not None:
                 self._conn.close()
+            if self._lifeline is not None:
+                self._lifeline.close()
             if self._queue is not None:
                 self._a._forget(self.id)
