@@ -240,7 +240,7 @@
 | **Action** | the channel sends a command `calibrate` and then a question `head-status`; the author fails the command, named by its identity, and the question, named by itself, each with a code and a message |
 | **Expected** | two error envelopes reach the channel, one correlated to each message's identity, each carrying the code and the message the author gave. The act Go, C, C++ and Rust offered and Python did not: a hands-on pass found a Python Plugin could answer a question but never refuse it |
 
-## yoke-sdk-python:the-plugin-library.18 — on a stream socket, emit writes each message after its length; the registration offers it, and the Manifest declares the largest frame
+## yoke-sdk-python:the-plugin-library.19 — on a stream socket, emit writes each message after its length; the registration offers it, and the Manifest declares the largest frame
 
 | Field | Value |
 | --- | --- |
