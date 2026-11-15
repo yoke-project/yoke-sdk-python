@@ -686,7 +686,7 @@ capabilities:
             struct.unpack_from("<Q", mem, 24)[0], 3, "the refused frame was published"
         )
 
-    # std: yoke-sdk-python:the-plugin-library.18
+    # std: yoke-sdk-python:the-plugin-library.19
     async def test_on_a_stream_socket_emit_writes_each_message_after_its_length(self):
         Activate = families_pb2.Control.Activate
         d = plugin.Declaration(
