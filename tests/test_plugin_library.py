@@ -687,5 +687,60 @@ capabilities:
         )
 
 
+    # std: yoke-sdk-python:the-plugin-library.18
+    async def test_on_a_stream_socket_emit_writes_each_message_after_its_length(self):
+        Activate = families_pb2.Control.Activate
+        d = plugin.Declaration(
+            id="com.yoke.station.acquire",
+            streams=[
+                plugin.Stream("station.raw", tolerates_loss=True, max_frame=4 << 20),
+                plugin.Stream("station.plain"),
+            ],
+        )
+        m = d.manifest()
+        self.assertIn("max_frame: 4194304", m)
+        self.assertEqual(m.count("max_frame"), 1)
+        channel = await self.bench(accepted())
+        path = os.path.join(self.dir, "framed.sock")
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(path)
+        listener.listen(1)
+        self.addCleanup(listener.close)
+        got = []
+
+        def read():
+            conn, _ = listener.accept()
+            with conn:
+                head = b""
+                while len(head) < 4:
+                    head += conn.recv(4 - len(head))
+                (length,) = struct.unpack("<I", head)
+                body = b""
+                while len(body) < length:
+                    body += conn.recv(length - len(body))
+                got.append(body)
+
+        reader = threading.Thread(target=read)
+        reader.start()
+        unit = await self.start()
+        await self.opened()
+        offered = list(channel.registrations[0].transports)
+        for t in (
+            Activate.TRANSPORT_SHARED_OBJECT,
+            Activate.TRANSPORT_ORDERED_STREAM,
+            Activate.TRANSPORT_FRAMED_STREAM,
+        ):
+            self.assertIn(t, offered)
+        await self.activate("c-1", "station.preview", Activate.TRANSPORT_FRAMED_STREAM, path)
+        self.assertEqual((await self.acked("c-1")).outcome, families_pb2.Ack.OUTCOME_DONE)
+        a = await self.handed(unit, plugin.Activated)
+        self.assertEqual(a.transport, "framed stream")
+        await unit.emit("station.preview", bytes(600 << 10))
+        await asyncio.to_thread(reader.join, 3)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(len(got[0]), 16 + (600 << 10))
+        self.assertEqual(struct.unpack("<Q", got[0][:8])[0], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

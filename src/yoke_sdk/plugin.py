@@ -50,6 +50,8 @@ class Stream:
     id: str
     tolerates_loss: bool = False
     tolerates_reorder: bool = False
+    max_frame: int = 0
+    """The largest payload the stream emits, in bytes; zero is the Core's default, 1 MiB."""
 
 
 @dataclasses.dataclass
@@ -108,6 +110,8 @@ class Declaration:
                     lines.append("    tolerates_loss: true")
                 if s.tolerates_reorder:
                     lines.append("    tolerates_reorder: true")
+                if s.max_frame:
+                    lines.append(f"    max_frame: {s.max_frame}")
         for key, ids in (
             ("commands", self.commands),
             ("queries", self.queries),
@@ -510,7 +514,10 @@ class Unit:
                     "data", families_pb2.Data(sequence=flow.sequence, payload=payload)
                 ).SerializeToString()
             try:
-                flow.conn.send(message)
+                if flow.lengthed:
+                    flow.conn.sendall(struct.pack("<I", len(message)) + message)
+                else:
+                    flow.conn.send(message)
             except OSError as failure:
                 raise Refusal(
                     "stream.inactive",
@@ -527,6 +534,8 @@ class _Flow:
     conn: socket.socket
     framed: bool
     sequence: int = 0
+    lengthed: bool = False
+    """A stream socket: each message is written whole, after its length as a u32 little-endian."""
     ring: _ring.Writer = None
     lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
 
@@ -548,6 +557,14 @@ def _connect(a):
         kind, framed = socket.SOCK_DGRAM, True
     elif a.transport == Activate.TRANSPORT_SHARED_OBJECT:
         return _connect_ring(a)
+    elif a.transport in (Activate.TRANSPORT_ORDERED_STREAM, Activate.TRANSPORT_FRAMED_STREAM):
+        conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            conn.connect(a.address)
+        except OSError:
+            conn.close()
+            raise
+        return _Flow(conn, a.transport == Activate.TRANSPORT_FRAMED_STREAM, lengthed=True)
     else:
         raise OSError(f"the transport {a.transport} is not one this library reaches")
     conn = socket.socket(socket.AF_UNIX, kind)
@@ -611,7 +628,11 @@ async def start(declaration, getenv=os.environ.get):
                 declared=declaration._surface(),
                 # This library writes the shared ring, so a stream of it that tolerates loss may be
                 # carried there.
-                transports=[families_pb2.Control.Activate.TRANSPORT_SHARED_OBJECT],
+                transports=[
+                    families_pb2.Control.Activate.TRANSPORT_SHARED_OBJECT,
+                    families_pb2.Control.Activate.TRANSPORT_ORDERED_STREAM,
+                    families_pb2.Control.Activate.TRANSPORT_FRAMED_STREAM,
+                ],
             )
         )
     except Exception as failure:

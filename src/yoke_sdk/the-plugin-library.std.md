@@ -239,3 +239,16 @@
 | **Precondition** | an open Session |
 | **Action** | the channel sends a command `calibrate` and then a question `head-status`; the author fails the command, named by its identity, and the question, named by itself, each with a code and a message |
 | **Expected** | two error envelopes reach the channel, one correlated to each message's identity, each carrying the code and the message the author gave. The act Go, C, C++ and Rust offered and Python did not: a hands-on pass found a Python Plugin could answer a question but never refuse it |
+
+## yoke-sdk-python:the-plugin-library.18 — on a stream socket, emit writes each message after its length; the registration offers it, and the Manifest declares the largest frame
+
+| Field | Value |
+| --- | --- |
+| **Cites** | arch/50-plugin-surface/07 §What the two tolerances select · arch/50-plugin-surface/08 §Where the data goes · arch/50-plugin-surface/02 §The four declared lists |
+| **Level** | L1 |
+| **Method** | test |
+| **Not applicable in** | — |
+| **Label** | blocking |
+| **Precondition** | a declaration whose stream `station.raw` declares `max_frame` 4 MiB |
+| **Action** | the Manifest is generated; a unit is started; the Core activates a stream on `TRANSPORT_FRAMED_STREAM`, and emit sends 600 KiB |
+| **Expected** | the Manifest says `max_frame: 4194304` for that stream alone; the registration offers the shared object and both stream transports; the activation is surfaced as `framed stream`; the stream socket reads a `u32` little-endian length and then the frame of sequence 1, whole |
