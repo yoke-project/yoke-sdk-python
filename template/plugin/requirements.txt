@@ -1,1 +1,1 @@
-yoke-sdk==0.7.0
+yoke-sdk==0.8.0
