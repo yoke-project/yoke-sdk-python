@@ -514,6 +514,122 @@ class TheInterfaceLibrary(unittest.IsolatedAsyncioTestCase):
                         f"{module}:{node.lineno} reaches the administrative contract",
                     )
 
+    # std: yoke-sdk-python:the-interface-library.10
+    async def test_a_reader_of_the_ring_waits_on_its_wake_word(self):
+        import ctypes
+        import mmap
+        import platform
+        import time
+
+        # The ring, as the Core makes it: four slots of 64 bytes, handed on the lifeline at the activation.
+        slots, capacity = 4, 64
+        size = 64 + slots * (32 + capacity)
+        memory = os.memfd_create("yoke-test")
+        self.addCleanup(os.close, memory)
+        os.ftruncate(memory, size)
+        mem = mmap.mmap(memory, size)
+        self.addCleanup(mem.close)
+        mem[:8] = b"YOKERING"
+        struct.pack_into("<III", mem, 8, 1, slots, capacity)
+        word = ctypes.c_uint32.from_buffer(mem, 32)
+        libc = ctypes.CDLL(None, use_errno=True)
+        futex = {"x86_64": 202, "aarch64": 98, "riscv64": 98, "armv7l": 240}[
+            platform.machine()
+        ]
+
+        def wake():
+            """Moves the word and wakes every waiter, as a producer and the Core do."""
+            word.value = (word.value + 1) & 0xFFFFFFFF
+            libc.syscall(
+                ctypes.c_long(futex),
+                ctypes.byref(word),
+                ctypes.c_int(1),
+                ctypes.c_int(1 << 30),
+                None,
+                None,
+                ctypes.c_int(0),
+            )
+
+        directory = tempfile.mkdtemp(prefix="ykd")
+        self.addCleanup(shutil.rmtree, directory, True)
+        path = os.path.join(directory, "00000001.sock")
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(path)
+        listener.listen(1)
+        self.addCleanup(listener.close)
+        accepted = []
+
+        def hand():
+            conn, _ = listener.accept()
+            socket.send_fds(conn, [b"\x01\x00\x00\x00\x00"], [memory])
+            accepted.append(conn)
+
+        threading.Thread(target=hand, daemon=True).start()
+
+        async def script(inbox, out):
+            out.put_nowait(opening())
+            while True:
+                f = await inbox.get()
+                r = request_of(f)
+                op = r.WhichOneof("operation") if r is not None else None
+                if op == "stream_subscribe":
+                    d = operations_pb2.Delivering(
+                        delivery="00000001", shared=path, flowing=True
+                    )
+                    out.put_nowait(answer(f.call, stream_subscribe=d))
+                elif op == "stream_unsubscribe":
+                    out.put_nowait(
+                        answer(f.call, stream_unsubscribe=operations_pb2.Released())
+                    )
+
+        def waits():
+            """The context switches of the thread reading the ring, so far."""
+            for task in os.listdir("/proc/self/task"):
+                with open(f"/proc/self/task/{task}/comm") as comm:
+                    if comm.read().strip() != "yoke-ring":
+                        continue
+                with open(f"/proc/self/task/{task}/status") as status:
+                    for line in status:
+                        if line.startswith("voluntary_ctxt_switches:"):
+                            return int(line.split()[1])
+            return None
+
+        core = Core(script)
+        attached = await within(Attachment.attach(await serve(self, core)))
+        delivery = await attached.subscribe_stream("acquire", "spectra")
+        await self._until(lambda: accepted)
+        reading = asyncio.ensure_future(delivery.next())
+        await asyncio.sleep(0.3)
+        before = waits()
+        await asyncio.sleep(1)
+        idle = waits() - before
+
+        # The producer publishes one frame, and wakes whoever waits on the word.
+        struct.pack_into("<QI", mem, 64 + 8, 1001, 3)
+        mem[64 + 32 : 64 + 35] = b"one"
+        struct.pack_into("<Q", mem, 64, 1)
+        struct.pack_into("<Q", mem, 24, 1)
+        published = time.monotonic()
+        wake()
+        f = await within(reading, "the frame")
+        took = time.monotonic() - published
+
+        # The lifeline closes and the ring is woken, as the Core does at a delivery's end.
+        accepted[0].close()
+        wake()
+        ended = await within(delivery.next(), "the delivery's end")
+
+        self.assertLessEqual(
+            idle, 5, f"waiting a second on an empty ring, the reader woke {idle} times"
+        )
+        self.assertEqual((f.sequence, f.sent_at, f.payload), (1, 1001, b"one"))
+        self.assertLess(
+            took, 0.1, f"the frame was read {took:.3f} s after it was published"
+        )
+        self.assertIsNone(ended)
+        del word
+        await attached.close()
+
 
 if __name__ == "__main__":
     unittest.main()
