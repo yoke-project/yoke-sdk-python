@@ -121,3 +121,16 @@
 | **Precondition** | this project |
 | **Action** | read every module the interface library is written in |
 | **Expected** | none imports or names the administrative contract's definitions or the administrative library — a program written with the interface library cannot reach the operations an interface must never issue, because nothing in it names them |
+
+## yoke-sdk-python:the-interface-library.10 — a reader of the ring waits on its wake word, not on a clock
+
+| Field | Value |
+| --- | --- |
+| **Cites** | arch/50-plugin-surface/07 §The shared ring · arch/70-interface-surface/07 §The three delivery paths · specs/90.32 |
+| **Level** | L1 |
+| **Method** | test |
+| **Not applicable in** | — |
+| **Label** | blocking |
+| **Precondition** | a Core that answers a subscription with the shared ring's lifeline, and on it hands a ring with nothing published |
+| **Action** | subscribe and wait for a frame for a second; then publish one frame and wake the ring's word, as a producer does; then close the lifeline and wake the ring, as the Core does |
+| **Expected** | waiting the second, the thread reading the ring woke no more than 5 times; the frame is read within 100 ms of being published, carrying its sequence, its clock and its payload; the delivery then ends |

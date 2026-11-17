@@ -14,12 +14,14 @@ _MAGIC = b"YOKERING"
 _VERSION = 1
 _OFF_PUBLISHED = 24
 _OFF_WAKE = 32
+_FUTEX_WAIT = 0
 _FUTEX_WAKE = 1
 # The futex system call's number is the architecture's; where this library does not know it the readers
-# are not woken, and a reader that cannot wait on the word polls it.
+# are not woken, and no ring is read: a reader that cannot wait on the word would have to poll it.
 _SYS_FUTEX = {"x86_64": 202, "aarch64": 98, "riscv64": 98, "armv7l": 240}.get(
     platform.machine()
 )
+_libc = ctypes.CDLL(None, use_errno=True)
 
 
 class Writer:
@@ -94,16 +96,33 @@ class Writer:
 
 
 class Reader:
-    """One reader of a ring, at its own pace: a client the Core handed the ring for reading alone. It reads
-    at a bounded interval rather than waiting on the shared word, which the layout allows a reader.
+    """One reader of a ring, at its own pace: a client the Core handed the ring for reading alone. It waits
+    on the ring's word with no bound; the producer wakes it at every frame, and the Core of 0.16.0 after
+    every stop and every end the lifeline carries, so a reader woken with nothing published reads its
+    lifeline then. Where this library does not know the futex system call, it offers no reading of a ring.
     """
 
     def __init__(self, fd):
         """Maps the ring a descriptor names, for reading alone, and reads its geometry from its header."""
+        if _SYS_FUTEX is None:
+            raise OSError(f"this library cannot wait on a ring on {platform.machine()}")
         size = os.fstat(fd).st_size
         if size < _HEADER:
             raise ValueError(f"the ring is {size} bytes, shorter than its header")
-        self._mem = mmap.mmap(fd, size, prot=mmap.PROT_READ)
+        _libc.mmap.restype = ctypes.c_void_p
+        _libc.mmap.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_long,
+        ]
+        address = _libc.mmap(None, size, mmap.PROT_READ, mmap.MAP_SHARED, fd, 0)
+        if address in (None, ctypes.c_void_p(-1).value):
+            raise OSError(ctypes.get_errno(), "the ring cannot be mapped")
+        self._address, self._size = address, size
+        self._mem = (ctypes.c_char * size).from_address(address)
         version, slots, capacity = struct.unpack_from("<III", self._mem, 8)
         if (
             self._mem[:8] != _MAGIC
@@ -111,24 +130,34 @@ class Reader:
             or slots == 0
             or _HEADER + slots * (_SLOT_HEADER + capacity) > size
         ):
-            self._mem.close()
+            self.close()
             raise ValueError("the memory handed is not a ring this library reads")
         self._slots, self._capacity, self._next = slots, capacity, 1
 
-    def next(self, interval):
-        """The next frame the reader can still read, as (sequence, clock, payload), or None when nothing
-        was published within the interval: a lap by the producer, or a slot overwritten while it was
-        copied, is a gap the sequence shows."""
-        import time
-
-        deadline = time.monotonic() + interval
+    def next(self):
+        """The next frame the reader can still read, as (sequence, clock, payload), waiting on the ring's
+        word with no bound; None when the word was woken with nothing published. A lap by the producer, or a
+        slot overwritten while it was copied, is a gap the sequence shows."""
         mem = self._mem
+        waited = False
         while True:
+            wake = struct.unpack_from("<I", mem, _OFF_WAKE)[0]
             published = struct.unpack_from("<Q", mem, _OFF_PUBLISHED)[0]
             if published < self._next:
-                if time.monotonic() >= deadline:
+                if waited:
                     return None
-                time.sleep(0.002)
+                # Shared, not private: the producer and the Core that wake it are other processes. The
+                # call releases the interpreter's lock while it waits.
+                _libc.syscall(
+                    ctypes.c_long(_SYS_FUTEX),
+                    ctypes.c_void_p(self._address + _OFF_WAKE),
+                    ctypes.c_int(_FUTEX_WAIT),
+                    ctypes.c_uint32(wake),
+                    None,
+                    None,
+                    ctypes.c_int(0),
+                )
+                waited = True
                 continue
             if published >= self._slots:
                 self._next = max(self._next, published - self._slots + 1)
@@ -146,4 +175,11 @@ class Reader:
 
     def close(self):
         """Lets the mapping go."""
-        self._mem.close()
+        if self._address is not None:
+            _libc.munmap(ctypes.c_void_p(self._address), ctypes.c_size_t(self._size))
+            self._address, self._mem = None, None
+
+
+def can_read():
+    """Whether this library can wait on a ring here, and so read one."""
+    return _SYS_FUTEX is not None

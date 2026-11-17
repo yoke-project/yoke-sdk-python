@@ -465,9 +465,13 @@ class Attachment:
         stream socket and the stream's ring itself — and opens it where the answer says it arrives: a
         per-subscriber socket the Core listens on, a stream socket, the ring, or the attachment's own
         connection. `reads` names a choice of "stream_socket" and "shared_object"; none, the packet socket.
+        Reading the ring itself needs a Core of 0.16.0 or later, which wakes the ring after every stop and
+        every end its lifeline carries, and is never offered where this library cannot wait on a ring.
         """
         if reads is None:
             reads = ["stream_socket", "shared_object"]
+        if not _ring.can_read():
+            reads = [r for r in reads if r != "shared_object"]
         Reads = operations_pb2.UnitStream
         names = {
             "stream_socket": Reads.READS_STREAM_SOCKET,
@@ -504,7 +508,10 @@ class Attachment:
             frames = asyncio.Queue()
             loop = asyncio.get_running_loop()
             threading.Thread(
-                target=_read_the_ring, args=(conn, frames, loop), daemon=True
+                target=_read_the_ring,
+                args=(conn, frames, loop),
+                daemon=True,
+                name="yoke-ring",
             ).start()
             delivery = Delivery(d.delivery, d.flowing, self, None, None, "shared")
             delivery._ring_frames, delivery._lifeline = frames, conn
@@ -537,7 +544,10 @@ class Attachment:
 def _read_the_ring(lifeline, frames, loop):
     """Reads a shared delivery on a thread of its own: the lifeline brings each activation's ring as a
     descriptor on one byte and each stop as a message of length zero, and its closing is the end; between
-    them, the ring is read frame by frame."""
+    them, the ring is read frame by frame. With no ring the lifeline is waited on; with one, the ring's word
+    is, with no bound, and the lifeline is read when the word moves with nothing published — the Core of
+    0.16.0 wakes it after every stop and every end the lifeline carries. Neither is read at an interval.
+    """
 
     def put(item):
         loop.call_soon_threadsafe(frames.put_nowait, item)
@@ -545,7 +555,7 @@ def _read_the_ring(lifeline, frames, loop):
     ring = None
     try:
         while True:
-            lifeline.settimeout(0.02 if ring is not None else 1.0)
+            lifeline.settimeout(0 if ring is not None else None)
             try:
                 head, fds, _, _ = socket.recv_fds(lifeline, 4, 1)
             except (socket.timeout, BlockingIOError):
@@ -579,7 +589,7 @@ def _read_the_ring(lifeline, frames, loop):
                             os.close(fds[0])
             if ring is not None:
                 while True:
-                    f = ring.next(0.05)
+                    f = ring.next()
                     if f is None:
                         break
                     put(Frame(f[0], f[1], f[2]))
