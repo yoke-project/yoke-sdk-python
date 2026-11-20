@@ -419,11 +419,17 @@ class Attachment:
             )
         ).command
 
-    async def ask(self, unit, type, payload=b""):
-        """Asks a unit a question, its payload opaque, and returns the answer's."""
+    async def ask(self, unit, type, payload=b"", cause=""):
+        """Asks a unit a question, its payload opaque, and returns the answer's. On a need's channel, a
+        unit answering a question names it as `cause`, and the Core gives this question that one's chain
+        and its deadline less a margin; any other channel refuses a cause `use.cause.unknown`.
+        """
         return (
             await self._ask(
-                "query", operations_pb2.Question(unit=unit, type=type, payload=payload)
+                "query",
+                operations_pb2.Question(
+                    unit=unit, type=type, payload=payload, cause=cause
+                ),
             )
         ).query.payload
 
@@ -540,27 +546,41 @@ class Attachment:
             f"the delivery {d.delivery} arrives where this projection cannot read it: {arrives}"
         )
 
+    async def follow(self, unit, stream, reads=None):
+        """Follows a unit's stream: starts it where it may and subscribes to it, and does both again each
+        time the delivery ends because the unit's Session did — a restart of the unit, on a need's channel
+        or any other. The first subscription is made before it returns; a refusal of it other than the
+        unit's absence is raised."""
+        f = Follow(self, unit, stream, reads)
+        await f._subscribe()
+        return f
+
 
 def _read_the_ring(lifeline, frames, loop):
     """Reads a shared delivery on a thread of its own: the lifeline brings each activation's ring as a
     descriptor on one byte and each stop as a message of length zero, and its closing is the end; between
     them, the ring is read frame by frame. With no ring the lifeline is waited on; with one, the ring's word
-    is, with no bound, and the lifeline is read when the word moves with nothing published — the Core of
-    0.16.0 wakes it after every stop and every end the lifeline carries. Neither is read at an interval.
+    is, with no bound, and the lifeline is waited on when the word moves with nothing published — the Core
+    of 0.16.0 wakes it after every stop and every end the lifeline carries, so its message is on its way.
+    Neither is read at an interval.
     """
 
     def put(item):
         loop.call_soon_threadsafe(frames.put_nowait, item)
 
     ring = None
+    # Whether the ring's word moved with nothing published: the Core does so after every stop and every
+    # end, and the lifeline's message is then on its way, so the reader waits for it there.
+    woken = False
     try:
         while True:
-            lifeline.settimeout(0 if ring is not None else None)
+            lifeline.settimeout(0 if ring is not None and not woken else None)
             try:
                 head, fds, _, _ = socket.recv_fds(lifeline, 4, 1)
             except (socket.timeout, BlockingIOError):
                 head, fds = None, []
             if head is not None:
+                woken = False
                 if not head:
                     put(None)
                     return
@@ -591,6 +611,7 @@ def _read_the_ring(lifeline, frames, loop):
                 while True:
                     f = ring.next()
                     if f is None:
+                        woken = True
                         break
                     put(Frame(f[0], f[1], f[2]))
     except OSError:
@@ -756,3 +777,89 @@ class Delivery:
                 self._lifeline.close()
             if self._queue is not None:
                 self._a._forget(self.id)
+
+
+# How long a follow waits between two attempts while the unit is not there to subscribe to.
+FOLLOW_RETRY = 0.25
+
+
+def _returning(error):
+    """Whether a refusal says the unit is not there yet — not running, or running with no Session —
+    which a follow waits out."""
+    return isinstance(error, Refusal) and error.code in (
+        "unit.not_running",
+        "unit.no_session",
+    )
+
+
+class Follow:
+    """A unit's stream followed across the unit's restarts. Frames come in order within a delivery; the
+    next delivery's numbering is its own. `delivery` is the identifier of the delivery the last frame came
+    on."""
+
+    def __init__(self, attachment, unit, stream, reads):
+        self._a, self._unit, self._stream, self._reads = attachment, unit, stream, reads
+        self._current = None
+        self._closed = False
+
+    @property
+    def delivery(self):
+        return self._current.id if self._current is not None else ""
+
+    async def _subscribe(self):
+        """Starts the stream, where it may, and subscribes to it, until it succeeds, the unit's absence
+        aside."""
+        while True:
+            if self._closed:
+                raise Ended()
+            try:
+                await self._a.start_stream(self._unit, self._stream)
+                started = True
+            except Refusal as error:
+                # A start refused for any other reason leaves a stream that may flow anyway: the
+                # subscription says.
+                started = not _returning(error)
+            if started:
+                try:
+                    self._current = await self._a.subscribe_stream(
+                        self._unit, self._stream, self._reads
+                    )
+                    return
+                except Refusal as error:
+                    if not _returning(error):
+                        raise
+            await asyncio.sleep(FOLLOW_RETRY)
+
+    async def next(self):
+        """The next frame of the stream, across the unit's restarts; an error that it ended once the
+        follow was closed or the attachment ended."""
+        while True:
+            d = self._current
+            if d is None or self._closed:
+                raise Ended()
+            try:
+                frame = await d.next()
+            except Refusal as error:
+                if not _returning(error):
+                    raise
+                frame = None
+            if frame is not None:
+                return frame
+            if self._closed:
+                raise Ended()
+            # The delivery ended with the unit's Session: what was opened for it is let go, and the
+            # stream followed again.
+            try:
+                await d.release()
+            except Error:
+                pass
+            await self._subscribe()
+
+    async def close(self):
+        """Ends the follow and releases its delivery."""
+        if self._closed:
+            return
+        self._closed = True
+        d, self._current = self._current, None
+        if d is not None:
+            await d.release()
