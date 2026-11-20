@@ -55,6 +55,24 @@ class Stream:
 
 
 @dataclasses.dataclass
+class Use:
+    """What a Plugin uses of one ``unit`` need: questions it asks and streams it follows, in the bound
+    unit's vocabulary. There are no commands: a unit never instructs another."""
+
+    questions: list = dataclasses.field(default_factory=list)
+    streams: list = dataclasses.field(default_factory=list)
+
+
+@dataclasses.dataclass
+class UseObject:
+    """A question or a stream a Plugin uses through a ``unit`` need: set ``query`` or ``stream``."""
+
+    need: str
+    query: str | None = None
+    stream: str | None = None
+
+
+@dataclasses.dataclass
 class Object:
     """The one thing a capability governs: set exactly one field."""
 
@@ -63,6 +81,8 @@ class Object:
     query: str | None = None
     occurrence: str | None = None
     surface: str | None = None
+    use: UseObject | None = None
+    """A question or a stream of a ``unit`` need, named in the declaration's ``uses``."""
 
 
 @dataclasses.dataclass
@@ -91,6 +111,10 @@ class Declaration:
     queries: list = dataclasses.field(default_factory=list)
     occurrences: list = dataclasses.field(default_factory=list)
     capabilities: list = dataclasses.field(default_factory=list)
+    uses: dict = dataclasses.field(default_factory=dict)
+    """For each ``unit`` need, the Use the Plugin makes of the unit bound to it."""
+    rewrites: list = dataclasses.field(default_factory=list)
+    """The ``secret`` needs whose value the unit replaces itself, with ``rewrite``."""
 
     def manifest(self):
         """The document the declaration generates."""
@@ -120,19 +144,38 @@ class Declaration:
             if ids:
                 lines.append(f"{key}:")
                 lines += [f"  - id: {_scalar(i)}" for i in ids]
+        if self.uses:
+            lines.append("uses:")
+            for need in sorted(self.uses):
+                u = self.uses[need]
+                lines.append(
+                    f"  {_scalar(need)}:" + ("" if u.questions or u.streams else " {}")
+                )
+                for key, ids in (("questions", u.questions), ("streams", u.streams)):
+                    if ids:
+                        lines.append(f"    {key}:")
+                        lines += [f"      - {_scalar(i)}" for i in ids]
+        if self.rewrites:
+            lines.append("rewrites:")
+            lines += [f"  - {_scalar(n)}" for n in self.rewrites]
         if self.capabilities:
             lines.append("capabilities:")
             for c in self.capabilities:
+                lines += [f"  - name: {_scalar(c.name)}", "    governs:"]
+                g = c.governs
+                if g.use is not None:
+                    lines += ["      use:", f"        need: {_scalar(g.use.need)}"]
+                    if g.use.query is not None:
+                        lines.append(f"        query: {_scalar(g.use.query)}")
+                    if g.use.stream is not None:
+                        lines.append(f"        stream: {_scalar(g.use.stream)}")
+                    continue
                 kind, governed = next(
                     (k, v)
-                    for k, v in dataclasses.asdict(c.governs).items()
-                    if v is not None
+                    for k, v in dataclasses.asdict(g).items()
+                    if v is not None and k != "use"
                 )
-                lines += [
-                    f"  - name: {_scalar(c.name)}",
-                    "    governs:",
-                    f"      {kind}: {_scalar(governed)}",
-                ]
+                lines.append(f"      {kind}: {_scalar(governed)}")
         return "\n".join(lines) + "\n"
 
     def _surface(self):
@@ -187,11 +230,19 @@ class Command:
 
 @dataclasses.dataclass
 class Question:
-    """A question the Core asked, to be answered."""
+    """A question the Core asked, to be answered. The Core states who asked, the instant the asker
+    stops waiting and the chain the question belongs to; the unit states none of them. A unit asking
+    on a need's channel while it answers names ``id`` as the cause."""
 
     id: str
     type: str
     payload: bytes
+    asker: str = ""
+    """``unit:<unit>``, ``channel:<name>`` or ``operator:<person>``."""
+    deadline: float = 0.0
+    """The instant the asker stops waiting, in seconds since the epoch."""
+    chain: str = ""
+    """The chain's identity, 32 lower-case hex digits."""
 
 
 @dataclasses.dataclass
@@ -367,7 +418,16 @@ class Unit:
                         self._events.put_nowait(Stopped(e.control.stop.stream))
                 elif family == "query" and e.query.WhichOneof("kind") == "question":
                     q = e.query.question
-                    self._events.put_nowait(Question(e.message_id, q.type, q.payload))
+                    self._events.put_nowait(
+                        Question(
+                            e.message_id,
+                            q.type,
+                            q.payload,
+                            q.asker,
+                            q.deadline / 1000,
+                            q.chain,
+                        )
+                    )
                 elif family == "error":
                     self._events.put_nowait(
                         Refused(e.correlation_id, refusal_of(e.error))
@@ -682,3 +742,35 @@ async def start(declaration, getenv=os.environ.get):
     if interval > 0:
         unit._tasks.append(asyncio.create_task(unit._beat(interval)))
     return unit
+
+
+def rewrite(path, value):
+    """Replaces the value of a secret the Plugin declares in ``rewrites``, at ``path`` — the value
+    ``${bind.<name>}`` resolved to — without a restart: the new value is written beside it as
+    ``value.new``, flushed, and renamed over it, so a reader meets the old value or the new one and never
+    a part of either. The Core never opens it; the unit reads it again when it next needs it.
+    """
+    directory = os.path.dirname(path)
+    new = os.path.join(directory, "value.new")
+    try:
+        fd = os.open(new, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, value)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.rename(new, path)
+    except OSError:
+        try:
+            os.remove(new)
+        except OSError:
+            pass
+        raise
+    try:
+        d = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(d)
+        finally:
+            os.close(d)
+    except OSError:
+        pass

@@ -82,7 +82,7 @@ def revoked(cause):
 
 
 class TheHarness(unittest.IsolatedAsyncioTestCase):
-    async def started(self, answer=restricted):
+    async def started(self, answer=restricted, extra_env=None):
         self.dir = tempfile.mkdtemp(prefix="yph")
         self.addCleanup(shutil.rmtree, self.dir, True)
         self.channel = Channel(answer)
@@ -111,6 +111,7 @@ class TheHarness(unittest.IsolatedAsyncioTestCase):
             "YOKE_SOCKET": os.path.join(self.dir, "plugin.sock"),
             "YOKE_BIND": os.path.join(self.dir, "bind.sock"),
             "YOKE_TOKEN": "t",
+            **(extra_env or {}),
         }
         self.process = await asyncio.create_subprocess_exec(
             sys.executable, "-m", "yoke_sdk_harness", env=env
@@ -325,6 +326,60 @@ class TheHarness(unittest.IsolatedAsyncioTestCase):
         governed = {c.governs.stream for c in d.capabilities}
         for stream in (strict[0].id, lossy[0].id):
             self.assertIn(stream, governed, f"{stream} is governed by no capability")
+
+    # std: yoke-sdk-python:the-harness.11
+    async def test_a_question_is_observed_with_who_asked_its_deadline_and_chain(self):
+        await self.started()
+        await self.directive("start")
+        chain = "0123456789abcdef0123456789abcdef"
+        await self.send(
+            session_pb2.Envelope(
+                message_id="q-1",
+                session_id="sid-1",
+                query=families_pb2.Query(
+                    question=families_pb2.Query.Question(
+                        type="status",
+                        asker="operator:ada",
+                        deadline=1_795_000_000_123,
+                        chain=chain,
+                    )
+                ),
+            )
+        )
+        observed = await self.read()
+        self.assertEqual(observed["kind"], "question")
+        fields = observed["fields"]
+        self.assertEqual(
+            (fields["asker"], fields["deadline"], fields["chain"]),
+            ("operator:ada", 1_795_000_000_123, chain),
+        )
+
+    # std: yoke-sdk-python:the-harness.12
+    async def test_the_secret_it_rewrites_is_declared_where_the_suite_names_it(self):
+        plain = harness.declaration({"CONFORMANCE_FEATURES": "max_frame"}.get)
+        self.assertEqual(plain.rewrites, [])
+        self.assertNotIn("secret:token", plain.needs)
+        named = harness.declaration({"CONFORMANCE_FEATURES": "max_frame,rewrites"}.get)
+        self.assertEqual(named.rewrites, ["token"])
+        self.assertIn("secret:token", named.needs)
+        directory = tempfile.mkdtemp(prefix="yps")
+        self.addCleanup(shutil.rmtree, directory, True)
+        secret = os.path.join(directory, "value")
+        with open(secret, "wb") as f:
+            f.write(b"first")
+        await self.started(
+            extra_env={
+                "CONFORMANCE_FEATURES": "max_frame,rewrites",
+                "CONFORMANCE_SECRET": secret,
+            }
+        )
+        await self.directive("start")
+        _, result = await self.directive(
+            "rewrite", {"secret": "token", "value": "second"}
+        )
+        self.assertEqual(result.get("value"), {})
+        with open(secret, "rb") as f:
+            self.assertEqual(f.read(), b"second")
 
 
 if __name__ == "__main__":

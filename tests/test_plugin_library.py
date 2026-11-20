@@ -744,6 +744,117 @@ capabilities:
         self.assertEqual(len(got[0]), 16 + (600 << 10))
         self.assertEqual(struct.unpack("<Q", got[0][:8])[0], 1)
 
+    # std: yoke-sdk-python:the-plugin-library.20
+    def test_a_declaration_says_what_it_uses_and_the_secrets_it_rewrites(self):
+        d = plugin.Declaration(
+            id="com.yoke.calendar",
+            needs=["unit:accounts", "secret:refresh"],
+            uses={
+                "accounts": plugin.Use(
+                    questions=["oauth.token"], streams=["oauth.status"]
+                )
+            },
+            rewrites=["refresh"],
+            capabilities=[
+                plugin.Capability(
+                    "query.oauth-token.ask",
+                    plugin.Object(
+                        use=plugin.UseObject("accounts", query="oauth.token")
+                    ),
+                ),
+                plugin.Capability(
+                    "stream.oauth-status.follow",
+                    plugin.Object(
+                        use=plugin.UseObject("accounts", stream="oauth.status")
+                    ),
+                ),
+            ],
+        )
+        self.assertEqual(
+            d.manifest(),
+            "manifest: 1\n"
+            "id: com.yoke.calendar\n"
+            "protocol: 1\n"
+            "needs:\n"
+            "  - unit:accounts\n"
+            "  - secret:refresh\n"
+            "uses:\n"
+            "  accounts:\n"
+            "    questions:\n"
+            "      - oauth.token\n"
+            "    streams:\n"
+            "      - oauth.status\n"
+            "rewrites:\n"
+            "  - refresh\n"
+            "capabilities:\n"
+            "  - name: query.oauth-token.ask\n"
+            "    governs:\n"
+            "      use:\n"
+            "        need: accounts\n"
+            "        query: oauth.token\n"
+            "  - name: stream.oauth-status.follow\n"
+            "    governs:\n"
+            "      use:\n"
+            "        need: accounts\n"
+            "        stream: oauth.status\n",
+        )
+        plain = station().manifest()
+        for key in ("uses:", "rewrites:", "use:"):
+            self.assertNotIn(key, plain)
+
+    # std: yoke-sdk-python:the-plugin-library.21
+    async def test_a_question_surfaces_who_asked_its_deadline_and_its_chain(self):
+        await self.bench(accepted())
+        unit = await self.start()
+        await self.opened()
+        chain = "0123456789abcdef0123456789abcdef"
+        await self.send(
+            message_id="c-1",
+            query=families_pb2.Query(
+                question=families_pb2.Query.Question(
+                    type="head-status",
+                    payload=b"p",
+                    asker="unit:archive",
+                    deadline=1_795_000_000_123,
+                    chain=chain,
+                )
+            ),
+        )
+        question = await asyncio.wait_for(unit.next(), 2)
+        self.assertEqual(
+            (
+                question.id,
+                question.asker,
+                round(question.deadline * 1000),
+                question.chain,
+            ),
+            ("c-1", "unit:archive", 1_795_000_000_123, chain),
+        )
+        await unit.answer(question, b"42")
+        answered = await self.received(lambda e: payload(e) == "query")
+        self.assertEqual(answered.correlation_id, "c-1")
+
+    # std: yoke-sdk-python:the-plugin-library.22
+    def test_a_secret_the_unit_rewrites_is_replaced_in_place(self):
+        directory = tempfile.mkdtemp(prefix="yks")
+        self.addCleanup(shutil.rmtree, directory, True)
+        path = os.path.join(directory, "value")
+        with open(path, "wb") as f:
+            f.write(b"first")
+        plugin.rewrite(path, b"second")
+        with open(path, "rb") as f:
+            self.assertEqual(f.read(), b"second")
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        self.assertEqual(os.listdir(directory), ["value"])
+        os.chmod(directory, 0o500)
+        self.addCleanup(os.chmod, directory, 0o700)
+        if os.access(directory, os.W_OK):
+            self.skipTest("this account writes a directory whatever its mode")
+        with self.assertRaises(OSError):
+            plugin.rewrite(path, b"third")
+        with open(path, "rb") as f:
+            self.assertEqual(f.read(), b"second")
+
 
 if __name__ == "__main__":
     unittest.main()

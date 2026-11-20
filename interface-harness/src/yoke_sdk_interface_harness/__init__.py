@@ -81,6 +81,7 @@ _KNOWN = (
     "stream-start",
     "stream-stop",
     "stream-subscribe",
+    "stream-follow",
     "reclaim",
 )
 
@@ -93,6 +94,7 @@ class _Harness:
         self.attached = []
         self.standing = ""
         self.tasks = []
+        self.follows = 0
 
     async def send(self, line):
         self.writer.write(json.dumps(line).encode() + b"\n")
@@ -138,6 +140,25 @@ class _Harness:
                 "frame",
                 {
                     "delivery": delivery.id,
+                    "sequence": f.sequence,
+                    "sent_at": f.sent_at,
+                    "payload": f.payload.decode(errors="replace"),
+                },
+            )
+
+    async def followed(self, follow, id):
+        """Reports a followed stream's frames, each naming the follow and the delivery it came on."""
+        while True:
+            try:
+                f = await follow.next()
+            except base.Error:
+                await self.observe("follow-ended", {"follow": id})
+                return
+            await self.observe(
+                "frame",
+                {
+                    "follow": id,
+                    "delivery": follow.delivery,
                     "sequence": f.sequence,
                     "sent_at": f.sent_at,
                     "payload": f.payload.decode(errors="replace"),
@@ -227,6 +248,7 @@ class _Harness:
                 _text(args, "unit"),
                 _text(args, "type"),
                 _text(args, "payload").encode(),
+                cause=_text(args, "cause"),
             )
             return {"value": {"answer": payload.decode(errors="replace")}}
         if verb == "stream-start":
@@ -237,6 +259,13 @@ class _Harness:
             return {"value": _plain(ack)}
         if verb == "reclaim":
             return {"value": _plain(await a.reclaim())}
+        if verb == "stream-follow":
+            # A stream followed across its unit's restarts.
+            follow = await a.follow(_text(args, "unit"), _text(args, "stream"))
+            self.follows += 1
+            id = f"follow-{self.follows}"
+            self.tasks.append(asyncio.create_task(self.followed(follow, id)))
+            return {"value": {"follow": id}}
         # The suite may name what the library is to read; otherwise it names everything it reads.
         reads = args.get("reads") if isinstance(args.get("reads"), list) else None
         delivery = await a.subscribe_stream(
