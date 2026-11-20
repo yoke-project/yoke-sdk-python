@@ -630,6 +630,114 @@ class TheInterfaceLibrary(unittest.IsolatedAsyncioTestCase):
         del word
         await attached.close()
 
+    # std: yoke-sdk-python:the-interface-library.11
+    async def test_a_question_may_name_its_cause(self):
+        async def script(inbox, out):
+            out.put_nowait(opening())
+            while True:
+                f = await inbox.get()
+                r = request_of(f)
+                if r is None or r.WhichOneof("operation") != "query":
+                    continue
+                if r.query.cause:
+                    out.put_nowait(
+                        refusal(
+                            f.call,
+                            code="use.cause.unknown",
+                            message="no such question",
+                            item=r.query.cause,
+                        )
+                    )
+                else:
+                    out.put_nowait(
+                        answer(f.call, query=operations_pb2.Answered(payload=b"42"))
+                    )
+
+        core = Core(script)
+        attached = await within(Attachment.attach(await serve(self, core)))
+        self.assertEqual(await within(attached.ask("source", "status", b"p")), b"42")
+        with self.assertRaises(base.Refusal) as refused:
+            await within(attached.ask("source", "status", b"p", cause="q-7"))
+        self.assertEqual(refused.exception.code, "use.cause.unknown")
+        self.assertEqual(refused.exception.item, "q-7")
+        asked = [
+            (request_of(f).query.cause, request_of(f).query.payload)
+            for _, f in core.frames
+            if request_of(f) is not None
+            and request_of(f).WhichOneof("operation") == "query"
+        ]
+        self.assertEqual(asked, [("", b"p"), ("q-7", b"p")])
+        await attached.close()
+
+    # std: yoke-sdk-python:the-interface-library.12
+    async def test_a_stream_followed_is_subscribed_again_when_its_delivery_ends(self):
+        async def script(inbox, out):
+            out.put_nowait(opening())
+            starts = subscribes = 0
+            while True:
+                f = await inbox.get()
+                r = request_of(f)
+                op = r.WhichOneof("operation") if r is not None else None
+                if op == "stream_start":
+                    starts += 1
+                    if starts in (2, 3):
+                        out.put_nowait(
+                            refusal(
+                                f.call, code="unit.not_running", message="restarting"
+                            )
+                        )
+                    else:
+                        out.put_nowait(
+                            answer(f.call, stream_start=operations_pb2.Acknowledged())
+                        )
+                elif op == "stream_subscribe":
+                    subscribes += 1
+                    d = f"d-{subscribes}"
+                    out.put_nowait(
+                        answer(
+                            f.call,
+                            stream_subscribe=operations_pb2.Delivering(
+                                delivery=d, connection=True, flowing=True
+                            ),
+                        )
+                    )
+                    out.put_nowait(
+                        interface_pb2.CoreFrame(
+                            call=d,
+                            delivery=interface_pb2.StreamDelivery(
+                                delivery=d,
+                                sequence=1,
+                                sent_at=subscribes,
+                                payload=f"frame of {d}".encode(),
+                            ),
+                        )
+                    )
+                    if subscribes == 1:
+                        # The unit's Session ended: so does its delivery.
+                        out.put_nowait(completion(d))
+                elif op == "stream_unsubscribe":
+                    out.put_nowait(
+                        answer(f.call, stream_unsubscribe=operations_pb2.Released())
+                    )
+
+        core = Core(script)
+        attached = await within(Attachment.attach(await serve(self, core)))
+        follow = await within(attached.follow("acquire", "spectra"))
+        first = await within(follow.next(), "the first delivery's frame")
+        self.assertEqual((first.payload, follow.delivery), (b"frame of d-1", "d-1"))
+        second = await within(follow.next(), "the second delivery's frame")
+        self.assertEqual((second.payload, follow.delivery), (b"frame of d-2", "d-2"))
+        await within(follow.close())
+        ops = [
+            request_of(f).WhichOneof("operation")
+            for _, f in core.frames
+            if request_of(f) is not None
+        ]
+        self.assertEqual(ops.count("stream_start"), 4)
+        self.assertEqual(ops.count("stream_subscribe"), 2)
+        self.assertEqual(ops.count("stream_unsubscribe"), 2)
+        await attached.close()
+
 
 if __name__ == "__main__":
     unittest.main()

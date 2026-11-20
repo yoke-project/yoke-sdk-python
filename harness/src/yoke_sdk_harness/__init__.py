@@ -11,9 +11,12 @@ import signal
 from yoke_sdk import base, plugin
 
 
-def declaration():
+def declaration(getenv=os.environ.get):
     """What the harness declares: one object of every kind, a stream on each transport, each governed
-    by a capability."""
+    by a capability. A feature the suite names in CONFORMANCE_FEATURES is declared, and one it does not
+    name is left out, because a Core of an earlier release refuses a Manifest key it does not know.
+    """
+    features = (getenv("CONFORMANCE_FEATURES") or "").split(",")
     d = plugin.Declaration(
         id="com.yoke.conformance.python",
         streams=[
@@ -45,11 +48,15 @@ def declaration():
     )
     # A stream's largest frame is declared only to a suite that names it: a Core of an earlier release
     # refuses a Manifest key it does not know.
-    if "max_frame" not in os.environ.get("CONFORMANCE_FEATURES", "").split(","):
+    if "max_frame" not in features:
         d.streams = [s for s in d.streams if s.id != "conformance.large"]
         d.capabilities = [
             c for c in d.capabilities if c.governs.stream != "conformance.large"
         ]
+    # With `rewrites`, the harness needs the secret `token` and rewrites it.
+    if "rewrites" in features:
+        d.needs.append("secret:token")
+        d.rewrites = ["token"]
     return d
 
 
@@ -88,10 +95,10 @@ class _Harness:
         args = d.get("args") or {}
         verb = d.get("verb")
         if verb == "describe":
-            return {"value": {"manifest": declaration().manifest()}}
+            return {"value": {"manifest": declaration(self.getenv).manifest()}}
         if verb == "start":
             try:
-                unit = await plugin.start(declaration(), self.getenv)
+                unit = await plugin.start(declaration(self.getenv), self.getenv)
             except base.Error as error:
                 return _refusal(error)
             if self.unit is None:
@@ -115,6 +122,7 @@ class _Harness:
             "ack",
             "answer",
             "fail",
+            "rewrite",
         }
         if self.unit is None:
             return (
@@ -160,6 +168,15 @@ class _Harness:
                 await self.unit.fail(
                     args.get("about", ""), args.get("code", ""), args.get("message", "")
                 )
+            elif verb == "rewrite":
+                # The secret the suite placed, at the path the Core resolved for it.
+                path = self.getenv("CONFORMANCE_SECRET") or ""
+                if args.get("secret") != "token" or not path:
+                    return {"value": {"failed": True}}
+                try:
+                    plugin.rewrite(path, args.get("value", "").encode())
+                except OSError:
+                    return {"value": {"failed": True}}
             else:
                 return {"unrecognised": True}
         except base.Error as error:
@@ -178,6 +195,9 @@ class _Harness:
                     "id": event.id,
                     "type": event.type,
                     "payload": event.payload.decode("utf-8", "replace"),
+                    "asker": event.asker,
+                    "deadline": round(event.deadline * 1000),
+                    "chain": event.chain,
                 }
             elif isinstance(event, plugin.Activated):
                 kind, fields = "activated", {

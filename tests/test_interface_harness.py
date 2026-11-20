@@ -205,6 +205,48 @@ class TheInterfaceHarness(unittest.IsolatedAsyncioTestCase):
             "the script does not run the suite against the interface harness",
         )
 
+    # std: yoke-sdk-python:the-interface-harness.06
+    async def test_a_query_carries_its_cause_and_stream_follow_is_known(self):
+        async def script(inbox, out):
+            out.put_nowait(opening())
+            while True:
+                f = await inbox.get()
+                r = request_of(f)
+                if r is None:
+                    continue
+                if r.WhichOneof("operation") == "query" and r.query.cause:
+                    out.put_nowait(
+                        refusal(
+                            f.call,
+                            code="use.cause.unknown",
+                            message="no such question",
+                            item=r.query.cause,
+                        )
+                    )
+                else:
+                    out.put_nowait(
+                        refusal(
+                            f.call,
+                            code="subject.unknown",
+                            message="no such unit",
+                            subject=codes_pb2.Subject(kind="unit", identity="nobody"),
+                        )
+                    )
+
+        await self.bench(script)
+        await self.next()
+        await self.direct(1, "attach", channel="panel")
+        query = await self.direct(
+            2, "query", unit="source", type="status", cause="q-none"
+        )
+        self.assertEqual(query["refusal"], "use.cause.unknown")
+        self.assertEqual(query["value"]["item"], "q-none")
+        follow = await self.direct(3, "stream-follow", unit="nobody", stream="s")
+        self.assertNotIn("unrecognised", follow)
+        self.assertEqual(follow["refusal"], "subject.unknown")
+        await self.send({"type": "finish"})
+        await asyncio.wait_for(self.exit, 5)
+
 
 if __name__ == "__main__":
     unittest.main()
