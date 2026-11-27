@@ -32,6 +32,7 @@ def _event(e):
         "subject_kind": e.subject.kind,
         "subject": e.subject.identity,
         "severity": e.severity,
+        "line": e.line,
     }
 
 
